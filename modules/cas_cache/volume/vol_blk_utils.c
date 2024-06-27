@@ -197,7 +197,7 @@ int cas_blk_open_volume_by_bdev(ocf_volume_t *vol, struct block_device *bdev)
 	struct bd_object *bdobj;
 	int ret;
 
-	ret = ocf_ctx_volume_create(cas_ctx, vol, NULL, BLOCK_DEVICE_VOLUME);
+	ret = ocf_ctx_volume_create(cas_ctx, vol, ocf_volume_form_cache, NULL, BLOCK_DEVICE_VOLUME);
 	if (ret)
 		goto err;
 

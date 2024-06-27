@@ -298,6 +298,7 @@ rpm_spec_prepare() {
 
     sed -i "s/<CAS_NAME>/$CAS_NAME/g" "$RPM_SPECS_DIR/$CAS_NAME.spec"
     sed -i "s/<CAS_VERSION>/$CAS_VERSION/g" "$RPM_SPECS_DIR/$CAS_NAME.spec"
+    sed -i "s/<LAST_COMMIT_HASH_ABBR>/$LAST_COMMIT_HASH_ABBR/g" "$RPM_SPECS_DIR/$CAS_NAME.spec"
     sed -i "s/<CAS_LICENSE_NAME>/$CAS_LICENSE_NAME/g" "$RPM_SPECS_DIR/$CAS_NAME.spec"
     sed -i "s|<CAS_MODULES_DIR>|$CAS_MODULES_DIR|g" "$RPM_SPECS_DIR/$CAS_NAME.spec"
     sed -i "s/<CAS_HOMEPAGE>/${CAS_HOMEPAGE//\//\\/}/g" "$RPM_SPECS_DIR/$CAS_NAME.spec"

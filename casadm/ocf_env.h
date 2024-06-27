@@ -6,6 +6,7 @@
 #ifndef OCF_ENV_H_
 #define OCF_ENV_H_
 
+#include <limits.h>
 #include <string.h>
 #include <stdlib.h>
 #include "safeclib/safe_lib.h"

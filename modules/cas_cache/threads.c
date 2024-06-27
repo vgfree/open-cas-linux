@@ -20,7 +20,7 @@ struct cas_thread_info {
 	struct task_struct *thread;
 };
 
-static int _cas_io_queue_thread(void *data)
+static int queue_thread_run(void *data)
 {
 	ocf_queue_t q = data;
 	struct cas_thread_info *info;
@@ -57,6 +57,50 @@ static int _cas_io_queue_thread(void *data)
 	return 0;
 }
 
+ocf_queue_t cache_get_fastest_porter_queue(ocf_cache_t cache)
+{
+	uint32_t cpus_no = num_online_cpus();
+	struct cache_priv *cache_priv = ocf_cache_get_priv(cache);
+	ocf_queue_t queue;
+	ocf_queue_t min_queue;
+	uint32_t min_io, cmp_io;
+	int i;
+
+	ENV_BUG_ON(!cpus_no);
+	ENV_BUG_ON(!cache_priv);
+
+	queue = cache_priv->queues[0].porter_queue;
+	min_io = ocf_queue_pending_io(queue);
+	min_queue = queue;
+
+	for (i = 1; min_io && (i < cpus_no); i++) {
+		queue = cache_priv->queues[i].porter_queue;
+		cmp_io = ocf_queue_pending_io(queue);
+		if (cmp_io < min_io) {
+			min_io = cmp_io;
+			min_queue = queue;
+		}
+	}
+	return min_queue;
+}
+
+void cache_print_each_porter_queue_pending_io(ocf_cache_t cache)
+{
+	uint32_t cpus_no = num_online_cpus();
+	struct cache_priv *cache_priv = ocf_cache_get_priv(cache);
+	ocf_queue_t queue;
+	uint32_t io;
+	int i;
+
+	ENV_BUG_ON(!cache_priv);
+
+	for (i = 0; i < cpus_no; i++) {
+		queue = cache_priv->queues[i].porter_queue;
+		io = ocf_queue_pending_io(queue);
+		printk(KERN_WARNING "Still pending %d IO requests at index %d in cache %s\n", io, i, ocf_cache_get_name(cache));
+	}
+}
+
 static void _cas_cleaner_complete(ocf_cleaner_t c, uint32_t interval)
 {
 	struct cas_thread_info *info = ocf_cleaner_get_priv(c);
@@ -66,7 +110,7 @@ static void _cas_cleaner_complete(ocf_cleaner_t c, uint32_t interval)
 	complete(&info->sync_compl);
 }
 
-static int _cas_cleaner_thread(void *data)
+static int cleaner_thread_run(void *data)
 {
 	ocf_cleaner_t c = data;
 	ocf_cache_t cache = ocf_cleaner_get_cache(c);
@@ -94,7 +138,7 @@ static int _cas_cleaner_thread(void *data)
 
 		atomic_set(&info->kicked, 0);
 		init_completion(&info->sync_compl);
-		ocf_cleaner_run(c, cache_priv->io_queues[smp_processor_id()]);
+		ocf_cleaner_run(c, cache_get_fastest_porter_queue(cache));
 		wait_for_completion(&info->sync_compl);
 
 		/*
@@ -111,18 +155,18 @@ static int _cas_cleaner_thread(void *data)
 		}
 	} while (true);
 
+	cache_print_each_porter_queue_pending_io(cache);
+
 	CAS_COMPLETE_AND_EXIT(&info->compl, 0);
 
 	return 0;
 }
 
 static int _cas_create_thread(struct cas_thread_info **pinfo,
-		int (*threadfn)(void *), void *priv, int cpu,
-		const char *fmt, ...)
+		int (*threadfn)(void *), void *priv, const char *name, int cpu)
 {
 	struct cas_thread_info *info;
 	struct task_struct *thread;
-	va_list args;
 
 	info = kzalloc(sizeof(*info), GFP_KERNEL);
 	if (!info)
@@ -132,10 +176,7 @@ static int _cas_create_thread(struct cas_thread_info **pinfo,
 	init_completion(&info->compl);
 	init_completion(&info->sync_compl);
 	init_waitqueue_head(&info->wq);
-
-	va_start(args, fmt);
-	vsnprintf(info->name, sizeof(info->name), fmt, args);
-	va_end(args);
+	snprintf(info->name, sizeof(info->name), "%s", name);
 
 	thread = kthread_create(threadfn, priv, "%s", info->name);
 	if (IS_ERR(thread)) {
@@ -176,19 +217,12 @@ static void _cas_stop_thread(struct cas_thread_info *info)
 	kfree(info);
 }
 
-int cas_create_queue_thread(ocf_cache_t cache, ocf_queue_t q, int cpu)
+int cas_create_queue_thread(ocf_queue_t q, const char *name, int cpu)
 {
 	struct cas_thread_info *info;
-	const char *cache_num = ocf_cache_get_name(cache) + 5;
 	int result;
 
-	if (cpu == -1) {
-		result = _cas_create_thread(&info, _cas_io_queue_thread,
-				q, cpu, "cas_mngt_%s", cache_num);
-	} else {
-		result = _cas_create_thread(&info, _cas_io_queue_thread,
-				q, cpu, "cas_io_%s_%d", cache_num, cpu);
-	}
+	result = _cas_create_thread(&info, queue_thread_run, q, name, cpu);
 	if (!result) {
 		ocf_queue_set_priv(q, info);
 		_cas_start_thread(info);
@@ -211,15 +245,12 @@ void cas_stop_queue_thread(ocf_queue_t q)
 	_cas_stop_thread(info);
 }
 
-int cas_create_cleaner_thread(ocf_cleaner_t c)
+int cas_create_cleaner_thread(ocf_cleaner_t c, const char *name)
 {
 	struct cas_thread_info *info;
-	ocf_cache_t cache = ocf_cleaner_get_cache(c);
 	int result;
 
-	result = _cas_create_thread(&info, _cas_cleaner_thread, c,
-			CAS_CPUS_ALL, "cas_cl_%s",
-			ocf_cache_get_name(cache));
+	result = _cas_create_thread(&info, cleaner_thread_run, c, name, CAS_CPUS_ALL);
 	if (!result) {
 		ocf_cleaner_set_priv(c, info);
 		_cas_start_thread(info);

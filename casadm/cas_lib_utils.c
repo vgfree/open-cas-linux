@@ -80,8 +80,7 @@ void sig_handler_interrupt_flushing(int x)
 	memset(&cmd_info, 0, sizeof(cmd_info));
 	cmd_info.cache_id = device_id;
 
-	int res =
-		run_ioctl(fd, KCAS_IOCTL_INTERRUPT_FLUSHING, &cmd_info);
+	int res = run_ioctl(fd, KCAS_IOCTL_INTERRUPT_FLUSHING, &cmd_info);
 
 	close(fd);
 	if (!res) {
@@ -286,7 +285,7 @@ void init_progress_bar(struct progress_status *ps)
 	}
 }
 
-void get_core_flush_progress(int fd, int cache_id, int core_id, float *prog)
+void get_core_flush_progress(int fd, uint32_t cache_id, int core_id, float *prog)
 {
 	struct kcas_core_info cmd_info;
 
@@ -300,7 +299,7 @@ void get_core_flush_progress(int fd, int cache_id, int core_id, float *prog)
 	}
 }
 
-void get_cache_flush_progress(int fd, int cache_id, float *prog)
+void get_cache_flush_progress(int fd, uint32_t cache_id, float *prog)
 {
 	struct kcas_cache_info cmd_info;
 
@@ -436,7 +435,7 @@ void *print_command_progress(void *th_arg)
  * @param retry decide if ioctl attepmts should retry
  */
 static int run_ioctl_interruptible_retry_option(int fd, int command, void *cmd,
-		char *friendly_name, int cache_id, int core_id, bool retry)
+		char *friendly_name, uint32_t cache_id, int core_id, bool retry)
 {
 	pthread_t thread;
 	int ioctl_res;
@@ -482,7 +481,7 @@ static int run_ioctl_interruptible_retry_option(int fd, int command, void *cmd,
  * be displayed in command prompt
  */
 int run_ioctl_interruptible(int fd, int command, void *cmd,
-		char *friendly_name, int cache_id, int core_id)
+		char *friendly_name, uint32_t cache_id, int core_id)
 {
 	return run_ioctl_interruptible_retry_option(fd, command, cmd, friendly_name, 
 				cache_id, core_id, false);
@@ -496,7 +495,7 @@ int run_ioctl_interruptible(int fd, int command, void *cmd,
  * be displayed in command prompt
  */
 int run_ioctl_interruptible_retry(int fd, int command, void *cmd,
-		char *friendly_name, int cache_id, int core_id)
+		char *friendly_name, uint32_t cache_id, int core_id)
 {
 	return run_ioctl_interruptible_retry_option(fd, command, cmd, friendly_name, 
 				cache_id, core_id, true);

@@ -8,6 +8,9 @@
 #ifndef __OCF_ENV_H__
 #define __OCF_ENV_H__
 
+#include <linux/limits.h>
+#include <linux/libfdt_env.h>
+#include <uapi/linux/limits.h>
 #include "linux_kernel_version.h"
 #include "utils/utils_gc.h"
 #include "ocf/ocf_err.h"

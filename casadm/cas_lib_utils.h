@@ -20,7 +20,7 @@ struct progress_status {
 					 *!< operation was started */
 	char *friendly_name;		/*!< name of management operation that shall
 					 *!< be displayed in command prompt */
-	int cache_id;			/*!< cache id */
+	uint32_t cache_id;		/*!< cache id */
 	int core_id;			/*!< core id */
 };
 
@@ -30,9 +30,9 @@ void print_progress_bar_or_indicator(float prog, struct progress_status *ps);
 int run_ioctl(int fd, int command, void *cmd);
 int run_ioctl_retry(int fd, int command, void *cmd);
 int run_ioctl_interruptible(int fd, int command, void *cmd,
-		char *friendly_name, int cache_id, int core_id);
+		char *friendly_name, uint32_t cache_id, int core_id);
 int run_ioctl_interruptible_retry(int fd, int command, void *cmd,
-		char *friendly_name, int cache_id, int core_id);
+		char *friendly_name, uint32_t cache_id, int core_id);
 int open_ctrl_device();
 int was_ioctl_interrupted();
 void set_default_sig_handler();

@@ -38,6 +38,7 @@ long cas_service_ioctl_ctrl(struct file *filp, unsigned int cmd,
 		unsigned long arg)
 {
 	int retval = 0;
+	int i;
 
 	if (_IOC_TYPE(cmd) != KCAS_IOCTL_MAGIC)
 		return -EINVAL;
@@ -52,8 +53,15 @@ long cas_service_ioctl_ctrl(struct file *filp, unsigned int cmd,
 		struct kcas_start_cache *cmd_info;
 		struct ocf_mngt_cache_config cfg;
 		struct ocf_mngt_cache_attach_config attach_cfg;
+		void *data;
 
 		GET_CMD_INFO(cmd_info, arg);
+		for (i = 0; i < OCF_CORE_MAX; i ++) {
+			if (cmd_info->fs_meta_dict[i].length && cmd_info->fs_meta_dict[i].data) {
+				_GET_CMD_INFO(data, cmd_info->fs_meta_dict[i].data, cmd_info->fs_meta_dict[i].length);
+				cmd_info->fs_meta_dict[i].data = data;
+			}
+		}
 
 		retval = cache_mngt_create_cache_cfg(&cfg, &attach_cfg, cmd_info);
 		if (retval)
@@ -61,6 +69,11 @@ long cas_service_ioctl_ctrl(struct file *filp, unsigned int cmd,
 
 		retval = cache_mngt_init_instance(&cfg, &attach_cfg, cmd_info);
 
+		for (i = 0; i < OCF_CORE_MAX; i ++) {
+			if (cmd_info->fs_meta_dict[i].length && cmd_info->fs_meta_dict[i].data) {
+				vfree(cmd_info->fs_meta_dict[i].data);
+			}
+		}
 		RETURN_CMD_RESULT(cmd_info, arg, retval);
 	}
 
@@ -137,10 +150,15 @@ long cas_service_ioctl_ctrl(struct file *filp, unsigned int cmd,
 
 	case KCAS_IOCTL_INSERT_CORE: {
 		struct kcas_insert_core *cmd_info;
+		void *data = NULL;
 		struct ocf_mngt_core_config cfg;
 		char cache_name[OCF_CACHE_NAME_SIZE];
 
 		GET_CMD_INFO(cmd_info, arg);
+		if (cmd_info->fs_meta_dict.length && cmd_info->fs_meta_dict.data) {
+			_GET_CMD_INFO(data, cmd_info->fs_meta_dict.data, cmd_info->fs_meta_dict.length);
+			cmd_info->fs_meta_dict.data = data;
+		}
 
 		cache_name_from_id(cache_name, cmd_info->cache_id);
 
@@ -151,6 +169,9 @@ long cas_service_ioctl_ctrl(struct file *filp, unsigned int cmd,
 		retval = cache_mngt_add_core_to_cache(cache_name,
 					OCF_CACHE_NAME_SIZE, &cfg, cmd_info);
 
+		if (cmd_info->fs_meta_dict.length && cmd_info->fs_meta_dict.data) {
+			vfree(data);
+		}
 		RETURN_CMD_RESULT(cmd_info, arg, retval);
 	}
 
@@ -265,6 +286,16 @@ long cas_service_ioctl_ctrl(struct file *filp, unsigned int cmd,
 
 		retval = cache_mngt_flush_object(cache_name, OCF_CACHE_NAME_SIZE,
 						core_name, OCF_CORE_NAME_SIZE);
+
+		RETURN_CMD_RESULT(cmd_info, arg, retval);
+	}
+
+	case KCAS_IOCTL_DUMP_INFLIGHT: {
+		struct kcas_dump_inflight *cmd_info;
+
+		GET_CMD_INFO(cmd_info, arg);
+
+		retval = cache_mngt_dump_inflight(cmd_info->cache_id);
 
 		RETURN_CMD_RESULT(cmd_info, arg, retval);
 	}

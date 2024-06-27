@@ -35,11 +35,21 @@
 #define CACHE_INIT_STANDBY_NEW 2 /**< initialize failover standby cache */
 #define CACHE_INIT_STANDBY_LOAD 3 /**< load failover standby cache */
 
+struct fs_meta_lba {
+	unsigned long lba_beg;
+	unsigned long lba_end;
+};
+struct fs_meta_map {
+	uint16_t core_id;
+	void *data;
+	uint32_t length;
+};
+
 struct kcas_start_cache {
 	/**
 	 * id of newely inserted cache (in range 1-OCF_CACHE_ID_MAX).
 	 */
-	uint16_t cache_id;
+	uint32_t cache_id;
 
 	/**
 	 * cache initialization mode
@@ -72,11 +82,13 @@ struct kcas_start_cache {
 
 	uint64_t min_free_ram; /**< Minimum free RAM memory for cache metadata */
 
+	struct fs_meta_map fs_meta_dict[OCF_CORE_MAX];
+
 	int ext_err_code;
 };
 
 struct kcas_stop_cache {
-	uint16_t cache_id; /**< id of cache to be stopped */
+	uint32_t cache_id; /**< id of cache to be stopped */
 
 	uint8_t flush_data; /**< should data be flushed? */
 
@@ -84,7 +96,7 @@ struct kcas_stop_cache {
 };
 
 struct kcas_set_cache_state {
-	uint16_t cache_id; /**< id of cache for which state should be set */
+	uint32_t cache_id; /**< id of cache for which state should be set */
 
 	ocf_cache_mode_t caching_mode;
 
@@ -94,17 +106,18 @@ struct kcas_set_cache_state {
 };
 
 struct kcas_insert_core {
-	uint16_t cache_id; /**< id of an running cache */
+	uint32_t cache_id; /**< id of an running cache */
 	uint16_t core_id; /**< id of newely inserted core object */
 	char core_path_name[MAX_STR_LEN]; /**< path to a core object */
 	bool try_add; /**< add core to pool if cache isn't present */
 	bool update_path; /**< provide alternative path for core device */
+	struct fs_meta_map fs_meta_dict;
 
 	int ext_err_code;
 };
 
 struct kcas_remove_core {
-	uint16_t cache_id; /**< id of an running cache */
+	uint32_t cache_id; /**< id of an running cache */
 	uint16_t core_id; /**< id core object to be removed */
 	bool force_no_flush; /**< remove active core without flushing */
 	bool detach; /**< detach core without removing it from cache metadata */
@@ -113,7 +126,7 @@ struct kcas_remove_core {
 };
 
 struct kcas_remove_inactive {
-	uint16_t cache_id; /**< id of an running cache */
+	uint32_t cache_id; /**< id of an running cache */
 	uint16_t core_id; /**< id core object to be removed */
 	bool force; /**< remove inactive core without flushing */
 
@@ -121,34 +134,40 @@ struct kcas_remove_inactive {
 };
 
 struct kcas_reset_stats {
-	uint16_t cache_id; /**< id of an running cache */
+	uint32_t cache_id; /**< id of an running cache */
 	uint16_t core_id; /**< id core object to be removed */
 
 	int ext_err_code;
 };
 
 struct kcas_flush_cache {
-	uint16_t cache_id; /**< id of an running cache */
+	uint32_t cache_id; /**< id of an running cache */
 
 	int ext_err_code;
 };
 
 struct kcas_interrupt_flushing {
-	uint16_t cache_id; /**< id of an running cache */
+	uint32_t cache_id; /**< id of an running cache */
 
 	int ext_err_code;
 };
 
 struct kcas_flush_core {
-	uint16_t cache_id; /**< id of an running cache */
+	uint32_t cache_id; /**< id of an running cache */
 	uint16_t core_id; /**< id core object to be removed */
+
+	int ext_err_code;
+};
+
+struct kcas_dump_inflight {
+	uint32_t cache_id; /**< id of an running cache */
 
 	int ext_err_code;
 };
 
 struct kcas_get_stats {
 	/** id of a cache */
-	uint16_t cache_id;
+	uint32_t cache_id;
 
 	/** id of a core */
 	uint16_t core_id;
@@ -170,7 +189,7 @@ struct kcas_get_stats {
 
 struct kcas_cache_info {
 	/** id of a cache */
-	uint16_t cache_id;
+	uint32_t cache_id;
 
 	/** path to caching device */
 	char cache_path_name[MAX_STR_LEN];
@@ -190,7 +209,7 @@ struct kcas_core_info {
 	char core_path_name[MAX_STR_LEN];
 
 	/** Cache id */
-	uint16_t cache_id;
+	uint32_t cache_id;
 
 	/** Core id */
 	uint16_t core_id;
@@ -199,7 +218,7 @@ struct kcas_core_info {
 
 	ocf_core_state_t state;
 
-	bool exp_obj_exists;
+	bool exported_object_exists;
 
 	int ext_err_code;
 };
@@ -233,7 +252,7 @@ struct kcas_core_pool_count {
  */
 struct kcas_io_class {
 	/** Cache ID */
-	uint16_t cache_id;
+	uint32_t cache_id;
 
 	/** IO class id for which info will be retrieved */
 	uint32_t class_id;
@@ -249,7 +268,7 @@ struct kcas_io_class {
  */
 struct kcas_io_classes {
 	/** Cache ID */
-	uint16_t cache_id;
+	uint32_t cache_id;
 
 	int ext_err_code;
 
@@ -269,7 +288,7 @@ struct kcas_cache_list {
 	/** requested number of ids and returned in response cmd */
 	uint32_t in_out_num;
 	/** array with cache list and its properties */
-	uint16_t cache_id_tab[CACHE_LIST_ID_LIMIT];
+	uint32_t cache_id_tab[CACHE_LIST_ID_LIMIT];
 
 	int ext_err_code;
 };
@@ -302,7 +321,7 @@ enum kcas_core_param_id {
 };
 
 struct kcas_set_core_param {
-	uint16_t cache_id;
+	uint32_t cache_id;
 	uint16_t core_id;
 	enum kcas_core_param_id param_id;
 	uint32_t param_value;
@@ -311,7 +330,7 @@ struct kcas_set_core_param {
 };
 
 struct kcas_get_core_param {
-	uint16_t cache_id;
+	uint32_t cache_id;
 	uint16_t core_id;
 	enum kcas_core_param_id param_id;
 	uint32_t param_value;
@@ -320,13 +339,20 @@ struct kcas_get_core_param {
 };
 
 enum kcas_cache_param_id {
+	cache_param_get_dirty_meta_chunk,
+	cache_param_get_dirty_data_chunk,
+	cache_param_cleaner_policy_control,
 	cache_param_cleaning_policy_type,
 	cache_param_cleaning_alru_wake_up_time,
-	cache_param_cleaning_alru_stale_buffer_time,
+	cache_param_cleaning_alru_flush_split_unit,
 	cache_param_cleaning_alru_flush_max_buffers,
 	cache_param_cleaning_alru_activity_threshold,
+	cache_param_cleaning_alru_dirty_overflow_threshold,
 	cache_param_cleaning_acp_wake_up_time,
+	cache_param_cleaning_acp_flush_split_unit,
 	cache_param_cleaning_acp_flush_max_buffers,
+	cache_param_cleaning_acp_activity_threshold,
+	cache_param_cleaning_acp_dirty_overflow_threshold,
 	cache_param_promotion_policy_type,
 	cache_param_promotion_nhit_insertion_threshold,
 	cache_param_promotion_nhit_trigger_threshold,
@@ -334,7 +360,7 @@ enum kcas_cache_param_id {
 };
 
 struct kcas_set_cache_param {
-	uint16_t cache_id;
+	uint32_t cache_id;
 	enum kcas_cache_param_id param_id;
 	uint32_t param_value;
 
@@ -342,7 +368,7 @@ struct kcas_set_cache_param {
 };
 
 struct kcas_get_cache_param {
-	uint16_t cache_id;
+	uint32_t cache_id;
 	enum kcas_cache_param_id param_id;
 	uint32_t param_value;
 
@@ -351,14 +377,14 @@ struct kcas_get_cache_param {
 
 struct kcas_standby_detach
 {
-	uint16_t cache_id;
+	uint32_t cache_id;
 
 	int ext_err_code;
 };
 
 struct kcas_standby_activate
 {
-	uint16_t cache_id;
+	uint32_t cache_id;
 	char cache_path[MAX_STR_LEN]; /**< path to an ssd*/
 
 	int ext_err_code;
@@ -446,6 +472,8 @@ struct kcas_standby_activate
 
 /** List valid cache ids within Open CAS module */
 #define KCAS_IOCTL_LIST_CACHE _IOWR(KCAS_IOCTL_MAGIC, 17, struct kcas_cache_list)
+
+#define KCAS_IOCTL_DUMP_INFLIGHT _IOWR(KCAS_IOCTL_MAGIC, 18, struct kcas_dump_inflight)
 
 /** Add core object to an running cache instance */
 #define KCAS_IOCTL_INSERT_CORE _IOWR(KCAS_IOCTL_MAGIC, 22, struct kcas_insert_core)

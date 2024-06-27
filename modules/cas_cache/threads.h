@@ -13,12 +13,13 @@
 
 #define CAS_CPUS_ALL -1
 
-int cas_create_queue_thread(ocf_cache_t cache, ocf_queue_t q, int cpu);
+int cas_create_queue_thread(ocf_queue_t q, const char *name, int cpu);
 void cas_kick_queue_thread(ocf_queue_t q);
 void cas_stop_queue_thread(ocf_queue_t q);
 
-int cas_create_cleaner_thread(ocf_cleaner_t c);
+int cas_create_cleaner_thread(ocf_cleaner_t c, const char *name);
 void cas_kick_cleaner_thread(ocf_cleaner_t c);
 void cas_stop_cleaner_thread(ocf_cleaner_t c);
+
 
 #endif /* __THREADS_H__ */

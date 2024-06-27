@@ -193,14 +193,14 @@ static void print_core_conf(const struct kcas_core_info *info, FILE *outfile)
 	core_size = info->info.core_size_bytes / KiB / 4;
 	core_size_gb = calc_gb(core_size);
 
-	snprintf(exp_obj, sizeof(exp_obj), "/dev/cas%d-%d",
+	snprintf(exp_obj, sizeof(exp_obj), "/dev/cas%"PRIu32"-%d",
 			info->cache_id, info->core_id);
 
 	print_kv_pair(outfile, "Core Id", "%i", info->core_id);
 	print_kv_pair(outfile, "Core Device", "%s",
 				info->core_path_name);
 	print_kv_pair(outfile, "Exported Object", "%s",
-				info->exp_obj_exists ? exp_obj : "-");
+				info->exported_object_exists ? exp_obj : "-");
 	print_kv_pair(outfile, "Core Size", "%lu, [" UNIT_BLOCKS "], %.2f, [GiB]",
 				core_size, core_size_gb);
 	print_kv_pair_time(outfile, "Dirty for", info->info.dirty_for);
@@ -424,7 +424,7 @@ static void print_stats_ioclass_conf(const struct kcas_io_class* io_class,
 
 
 void cache_stats_inactive_usage(int ctrl_fd, const struct kcas_cache_info *cache_info,
-		      unsigned int cache_id, FILE* outfile)
+		      uint32_t cache_id, FILE* outfile)
 {
 	print_table_header(outfile, 4, "Inactive usage statistics", "Count",
 			   "%", "[Units]");
@@ -465,7 +465,7 @@ void print_stats_ioclass(struct kcas_io_class *io_class,
  *
  */
 int cache_stats_ioclasses(int ctrl_fd, const struct kcas_cache_info *cache_info,
-			  unsigned int cache_id, unsigned int core_id,
+			  uint32_t cache_id, unsigned int core_id,
 			  int io_class_id, FILE *outfile,
 			  unsigned int stats_filters)
 {
@@ -535,7 +535,7 @@ int cache_stats_ioclasses(int ctrl_fd, const struct kcas_cache_info *cache_info,
 }
 
 int cache_stats_conf(int ctrl_fd, const struct kcas_cache_info *cache_info,
-		     unsigned int cache_id, FILE *outfile, bool by_id_path)
+		     uint32_t cache_id, FILE *outfile, bool by_id_path)
 {
 	float flush_progress = 0;
 	float value;
@@ -559,7 +559,7 @@ int cache_stats_conf(int ctrl_fd, const struct kcas_cache_info *cache_info,
 	flush_progress = calculate_flush_progress(cache_info->info.dirty,
 			cache_info->info.flushed);
 
-	print_kv_pair(outfile, "Cache Id", "%d",
+	print_kv_pair(outfile, "Cache Id", "%"PRIu32,
 		      cache_info->cache_id);
 
 	cache_size = cache_line_in_4k(cache_info->info.size,
@@ -572,7 +572,7 @@ int cache_stats_conf(int ctrl_fd, const struct kcas_cache_info *cache_info,
 	print_kv_pair(outfile, "Cache Device", "%s",
 		      cache_path);
 	if (cache_exported_obj_exists) {
-		print_kv_pair(outfile, "Exported Object", "/dev/cas-cache-%d",
+		print_kv_pair(outfile, "Exported Object", "/dev/cas-cache-%"PRIu32,
 				cache_info->cache_id);
 	} else {
 		print_kv_pair(outfile, "Exported Object", "-");
@@ -628,7 +628,7 @@ void cache_stats_counters(struct kcas_get_stats *cache_stats, FILE *outfile,
 }
 
 static int cache_stats(int ctrl_fd, const struct kcas_cache_info *cache_info,
-		      unsigned int cache_id, FILE *outfile, unsigned int stats_filters,
+		      uint32_t cache_id, FILE *outfile, unsigned int stats_filters,
 		      bool by_id_path)
 {
 	struct kcas_get_stats cache_stats = {};
@@ -671,7 +671,7 @@ static int cache_stats(int ctrl_fd, const struct kcas_cache_info *cache_info,
 }
 
 int cache_stats_cores(int ctrl_fd, const struct kcas_cache_info *cache_info,
-		      unsigned int cache_id, unsigned int core_id, int io_class_id,
+		      uint32_t cache_id, unsigned int core_id, int io_class_id,
 		      FILE *outfile, unsigned int stats_filters, bool by_id_path)
 {
 	struct kcas_core_info core_info;
@@ -733,7 +733,7 @@ void *stats_printout(void *ctx)
  *
  * @return SUCCESS upon successful printing of statistic. FAILURE if any error happens
  */
-int cache_status(unsigned int cache_id, unsigned int core_id, int io_class_id,
+int cache_status(uint32_t cache_id, unsigned int core_id, int io_class_id,
 		 unsigned int stats_filters, unsigned int output_format, bool by_id_path)
 {
 	int ctrl_fd, i;
@@ -773,7 +773,7 @@ int cache_status(unsigned int cache_id, unsigned int core_id, int io_class_id,
 	cache_info.cache_id = cache_id;
 
 	if (ioctl(ctrl_fd, KCAS_IOCTL_CACHE_INFO, &cache_info) < 0) {
-		cas_printf(LOG_ERR, "Cache Id %d not running\n", cache_id);
+		cas_printf(LOG_ERR, "Cache Id %"PRIu32" not running\n", cache_id);
 		ret = FAILURE;
 		goto cleanup;
 	}

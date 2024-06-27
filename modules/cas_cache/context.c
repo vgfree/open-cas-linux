@@ -267,17 +267,22 @@ static uint64_t _cas_ctx_data_copy(ctx_data_t *dst, ctx_data_t *src,
 
 static int _cas_ctx_cleaner_init(ocf_cleaner_t c)
 {
-	return cas_create_cleaner_thread(c);
+	ocf_cache_t cache = ocf_cleaner_get_cache(c);
+	const char *cache_num = ocf_cache_get_name(cache) + 5;
+	char name[48] = {};
+	snprintf(name, sizeof(name), "cas_cleaner_%s", cache_num);
+
+	return cas_create_cleaner_thread(c, name);
 }
 
 static void _cas_ctx_cleaner_kick(ocf_cleaner_t c)
 {
-	return cas_kick_cleaner_thread(c);
+	cas_kick_cleaner_thread(c);
 }
 
 static void _cas_ctx_cleaner_stop(ocf_cleaner_t c)
 {
-	return cas_stop_cleaner_thread(c);
+	cas_stop_cleaner_thread(c);
 }
 
 #define CAS_LOG_FORMAT_STRING_MAX_LEN 256

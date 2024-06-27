@@ -67,25 +67,29 @@ struct cache_priv {
 	uint64_t core_id_bitmap[DIV_ROUND_UP(OCF_CORE_MAX, 8*sizeof(uint64_t))];
 	struct cas_classifier *classifier;
 	struct _cache_mngt_stop_context *stop_context;
-	atomic_t flush_interrupt_enabled;
+	env_atomic flush_interrupt_enabled;
+	struct fs_meta_map fs_meta_dict[OCF_CORE_MAX];
 	ocf_queue_t mngt_queue;
 	void *attach_context;
-	bool cache_exp_obj_initialized;
+	bool cache_exported_object_initialized;
 	struct {
 		struct queue_limits queue_limits;
 		bool fua;
 		bool flush;
 	} device_properties;
-	ocf_queue_t io_queues[];
+	struct {
+		ocf_queue_t worker_queue;
+		ocf_queue_t porter_queue;
+	} queues[];
 };
 
 extern ocf_ctx_t cas_ctx;
 
-static inline void cache_name_from_id(char *name, uint16_t id)
+static inline void cache_name_from_id(char *name, uint32_t id)
 {
 	int result;
 
-	result = snprintf(name, OCF_CACHE_NAME_SIZE, "cache%d", id);
+	result = snprintf(name, OCF_CACHE_NAME_SIZE, "cache%u", id);
 	ENV_BUG_ON(result >= OCF_CACHE_NAME_SIZE);
 }
 
@@ -97,7 +101,7 @@ static inline void core_name_from_id(char *name, uint16_t id)
 	ENV_BUG_ON(result >= OCF_CORE_NAME_SIZE);
 }
 
-static inline int cache_id_from_name(uint16_t *cache_id, const char *name)
+static inline int cache_id_from_name(uint32_t *cache_id, const char *name)
 {
 	const char *id_str;
 	long res;
@@ -135,7 +139,7 @@ static inline int core_id_from_name(uint16_t *core_id, const char *name)
 	return result;
 }
 
-static inline int mngt_get_cache_by_id(ocf_ctx_t ctx, uint16_t id,
+static inline int mngt_get_cache_by_id(ocf_ctx_t ctx, uint32_t id,
 		ocf_cache_t *cache)
 {
 	char cache_name[OCF_CACHE_NAME_SIZE];

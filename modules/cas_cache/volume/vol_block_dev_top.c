@@ -217,7 +217,7 @@ static int blkdev_handle_data_single(struct bd_object *bvol, struct bio *bio,
 {
 	ocf_cache_t cache = ocf_volume_get_cache(bvol->front_volume);
 	struct cache_priv *cache_priv = ocf_cache_get_priv(cache);
-	ocf_queue_t queue = cache_priv->io_queues[smp_processor_id()];
+	ocf_queue_t queue = cache_priv->queues[smp_processor_id()].worker_queue;
 	ocf_io_t io;
 	struct blk_data *data;
 	uint64_t flags = CAS_BIO_OP_FLAGS(bio);
@@ -332,7 +332,7 @@ static void blkdev_handle_discard(struct bd_object *bvol, struct bio *bio)
 {
 	ocf_cache_t cache = ocf_volume_get_cache(bvol->front_volume);
 	struct cache_priv *cache_priv = ocf_cache_get_priv(cache);
-	ocf_queue_t queue = cache_priv->io_queues[smp_processor_id()];
+	ocf_queue_t queue = cache_priv->queues[smp_processor_id()].worker_queue;
 	ocf_io_t io;
 
 	io = ocf_volume_new_io(bvol->front_volume, queue,
@@ -380,7 +380,7 @@ static void blkdev_handle_flush(struct bd_object *bvol, struct bio *bio)
 {
 	ocf_cache_t cache = ocf_volume_get_cache(bvol->front_volume);
 	struct cache_priv *cache_priv = ocf_cache_get_priv(cache);
-	ocf_queue_t queue = cache_priv->io_queues[smp_processor_id()];
+	ocf_queue_t queue = cache_priv->queues[smp_processor_id()].worker_queue;
 	ocf_io_t io;
 
 	io = ocf_volume_new_io(bvol->front_volume, queue, 0, 0, OCF_WRITE, 0,

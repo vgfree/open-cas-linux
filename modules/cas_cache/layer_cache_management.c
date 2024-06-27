@@ -576,6 +576,7 @@ static int exit_instance_finish(void *data)
 	struct _cache_mngt_stop_context *ctx = data;
 	ocf_queue_t mngt_queue;
 	int result = 0;
+	uint16_t i;
 
 	cache_priv = ocf_cache_get_priv(ctx->cache);
 	mngt_queue = cache_priv->mngt_queue;
@@ -591,6 +592,11 @@ static int exit_instance_finish(void *data)
 	if (!ocf_cache_is_standby(ctx->cache))
 		cas_cls_deinit(ctx->cache);
 
+	for (i = 0; i < OCF_CORE_MAX; i ++) {
+		if (cache_priv->fs_meta_dict[i].length && cache_priv->fs_meta_dict[i].data) {
+			vfree(cache_priv->fs_meta_dict[i].data);
+		}
+	}
 	vfree(cache_priv);
 
 	ocf_mngt_cache_unlock(ctx->cache);
@@ -700,10 +706,10 @@ static int _cache_mngt_cache_stop_sync(ocf_cache_t cache)
 	return result;
 }
 
-static uint16_t find_free_cache_id(ocf_ctx_t ctx)
+static uint32_t find_free_cache_id(ocf_ctx_t ctx)
 {
 	ocf_cache_t cache;
-	uint16_t id;
+	uint32_t id;
 	int result;
 
 	for (id = OCF_CACHE_ID_MIN; id < OCF_CACHE_ID_MAX; id++) {
@@ -885,6 +891,64 @@ int cache_mngt_flush_device(const char *cache_name, size_t name_len)
 	result = _cache_mngt_cache_flush_sync(cache, true,
 			_cache_read_unlock_put_cmpl);
 
+	return result;
+}
+
+int cache_mngt_get_dirty_meta_chunk(ocf_cache_t cache, uint32_t *control)
+{
+	int result = _cache_mngt_read_lock_sync(cache);
+	if (result)
+		return result;
+
+	*control = ocf_cache_cleaning_get_dirty_chunks(cache, true);
+
+	ocf_mngt_cache_read_unlock(cache);
+	return result;
+}
+
+int cache_mngt_get_dirty_data_chunk(ocf_cache_t cache, uint32_t *control)
+{
+	int result = _cache_mngt_read_lock_sync(cache);
+	if (result)
+		return result;
+
+	*control = ocf_cache_cleaning_get_dirty_chunks(cache, false);
+
+	ocf_mngt_cache_read_unlock(cache);
+	return result;
+}
+
+
+int cache_mngt_set_cleaner_policy(ocf_cache_t cache, uint32_t control)
+{
+	int result;
+
+	result = _cache_mngt_lock_sync(cache);
+	if (result)
+		return result;
+
+	result = ocf_mngt_cache_cleaner_set_policy(cache, control);
+	if (result)
+		goto out;
+
+	result = _cache_mngt_save_sync(cache);
+
+out:
+	ocf_mngt_cache_unlock(cache);
+	return result;
+}
+
+int cache_mngt_get_cleaner_policy(ocf_cache_t cache, uint32_t *control)
+{
+	int result;
+
+	result = _cache_mngt_read_lock_sync(cache);
+	if (result)
+		return result;
+
+	result = ocf_mngt_cache_cleaner_get_policy(cache, control);
+
+	ocf_mngt_cache_read_unlock(cache);
 	return result;
 }
 
@@ -1091,11 +1155,11 @@ int cache_mngt_core_pool_get_paths(struct kcas_core_pool_path *cmd_info)
 
 int cache_mngt_core_pool_remove(struct kcas_core_pool_remove *cmd_info)
 {
-	struct ocf_volume_uuid uuid;
+	struct ocf_volume_uuid uuid = {};
 	ocf_volume_t vol;
 
 	uuid.data = cmd_info->core_path_name;
-	uuid.size = strnlen(cmd_info->core_path_name, MAX_STR_LEN);
+	uuid.size = strnlen(cmd_info->core_path_name, MAX_STR_LEN) + 1;
 
 	vol = ocf_mngt_core_pool_lookup(cas_ctx, &uuid,
 			ocf_ctx_get_volume_type(cas_ctx,
@@ -1136,6 +1200,31 @@ static void cache_mngt_metadata_probe_end(void *priv, int error,
 	}
 
 	complete(&context->cmpl);
+}
+
+static int cas_create_volume_by_path(ocf_volume_t *vol, ocf_volume_form_t form, char *path)
+{
+	int path_length = strnlen(path, MAX_STR_LEN);
+	struct ocf_volume_uuid uuid = {};
+	uint8_t volume_type_id;
+	int ret;
+
+	if (path_length == MAX_STR_LEN || path_length == 0)
+		return -OCF_ERR_INVAL;
+
+	ret = cas_blk_identify_type(path, &volume_type_id);
+	if (ret)
+		return ret;
+
+	uuid.copy = true;
+	uuid.data = env_strdup(path, MAX_STR_LEN);
+	uuid.size = path_length + 1;
+
+	ret = ocf_ctx_volume_create(cas_ctx, vol, form, &uuid, volume_type_id);
+	if (ret)
+		return ret;
+
+	return ret;
 }
 
 int cache_mngt_cache_check_device(struct kcas_cache_check_device *cmd_info)
@@ -1244,12 +1333,13 @@ int cache_mngt_prepare_core_cfg(struct ocf_mngt_core_config *cfg,
 }
 
 static int cache_mngt_update_core_uuid(ocf_cache_t cache, const char *core_name,
-				size_t name_len, ocf_uuid_t uuid)
+				size_t name_len, ocf_uuid_t uuid_ptr)
 {
 	ocf_core_t core;
 	ocf_volume_t vol;
 	struct bd_object *bdvol;
 	int result;
+	struct ocf_volume_uuid uuid = {};
 
 	if (ocf_core_get_by_name(cache, core_name, name_len, &core)) {
 		/* no such core */
@@ -1265,14 +1355,20 @@ static int cache_mngt_update_core_uuid(ocf_cache_t cache, const char *core_name,
 	vol = ocf_core_get_volume(core);
 	bdvol = bd_object(vol);
 
-	if (!cas_bdev_match(uuid->data, bdvol->btm_bd)) {
+	if (!cas_bdev_match(uuid_ptr->data, bdvol->btm_bd)) {
 		printk(KERN_ERR "UUID provided does not match target core device\n");
 		return -ENODEV;
 	}
 
-	result = ocf_mngt_core_set_uuid(core, uuid);
-	if (result)
+	uuid.copy = true;
+	uuid.data = env_strdup(uuid_ptr->data, MAX_STR_LEN);
+	uuid.size = strnlen(uuid_ptr->data, MAX_STR_LEN) + 1;
+
+	result = ocf_mngt_core_set_uuid(core, &uuid);
+	if (result) {
+		env_free(uuid.data);
 		return result;
+	}
 
 	if (ocf_cache_is_device_attached(cache))
 		result = _cache_mngt_save_sync(cache);
@@ -1336,13 +1432,20 @@ int cache_mngt_add_core_to_cache(const char *cache_name, size_t name_len,
 	ocf_core_t core;
 	ocf_core_id_t core_id;
 	int result, remove_core_result;
+	struct ocf_volume_uuid uuid = {};
+	struct cache_priv *cache_priv = NULL;
 
 	result = ocf_mngt_cache_get_by_name(cas_ctx, cache_name,
 					name_len, &cache);
 	if (cfg->try_add && (result == -OCF_ERR_CACHE_NOT_EXIST)) {
-		result = ocf_mngt_core_pool_add(cas_ctx, &cfg->uuid,
+		uuid.copy = true;
+		uuid.data = env_strdup(cfg->uuid.data, MAX_STR_LEN);
+		uuid.size = strnlen(cfg->uuid.data, MAX_STR_LEN) + 1;
+
+		result = ocf_mngt_core_pool_add(cas_ctx, &uuid,
 				cfg->volume_type);
 		if (result) {
+			env_free(uuid.data);
 			cmd_info->ext_err_code =
 					-OCF_ERR_CANNOT_ADD_CORE_TO_POOL;
 			printk(KERN_ERR OCF_PREFIX_SHORT
@@ -1372,6 +1475,18 @@ int cache_mngt_add_core_to_cache(const char *cache_name, size_t name_len,
 		return result;
 	}
 
+	result = core_id_from_name(&core_id, cfg->name);
+	if (result)
+		goto error_affter_lock;
+	if (cmd_info->fs_meta_dict.length && cmd_info->fs_meta_dict.data) {
+		cache_priv = ocf_cache_get_priv(cache);
+		if (cache_priv->fs_meta_dict[core_id].length == 0) {
+			cache_priv->fs_meta_dict[core_id].data = vmalloc(cmd_info->fs_meta_dict.length);
+			memcpy(cache_priv->fs_meta_dict[core_id].data, cmd_info->fs_meta_dict.data, cmd_info->fs_meta_dict.length);
+			cache_priv->fs_meta_dict[core_id].length = cmd_info->fs_meta_dict.length;
+		}
+	}
+
 	cfg->seq_cutoff_threshold = seq_cut_off_mb * MiB;
 	cfg->seq_cutoff_promotion_count = 8;
 
@@ -1391,6 +1506,11 @@ int cache_mngt_add_core_to_cache(const char *cache_name, size_t name_len,
 	ocf_mngt_cache_add_core(cache, cfg, _cache_mngt_add_core_complete,
 			&add_context);
 	wait_for_completion(&add_context.cmpl);
+#if 0
+	if (result == -OCF_ERR_CORE_UUID_EXISTS) {
+		cmd_info->core_id = ocf_core_get_id(core);
+	}
+#endif
 	if (result)
 		goto error_affter_lock;
 
@@ -1541,6 +1661,7 @@ int cache_mngt_remove_core_from_cache(struct kcas_remove_core *cmd)
 	int result;
 	ocf_cache_t cache;
 	ocf_core_t core;
+	struct cache_priv *cache_priv = NULL;
 
 	result = mngt_get_cache_by_id(cas_ctx, cmd->cache_id, &cache);
 	if (result)
@@ -1576,8 +1697,15 @@ int cache_mngt_remove_core_from_cache(struct kcas_remove_core *cmd)
 
 	wait_for_completion(&context.cmpl);
 
-	if (result != -OCF_ERR_CORE_NOT_REMOVED && !cmd->detach)
+	if (result != -OCF_ERR_CORE_NOT_REMOVED && !cmd->detach) {
 		mark_core_id_free(cache, cmd->core_id);
+		cache_priv = ocf_cache_get_priv(cache);
+		if (cache_priv->fs_meta_dict[cmd->core_id].length && cache_priv->fs_meta_dict[cmd->core_id].data) {
+			vfree(cache_priv->fs_meta_dict[cmd->core_id].data);
+			cache_priv->fs_meta_dict[cmd->core_id].data = NULL;
+			cache_priv->fs_meta_dict[cmd->core_id].length = 0;
+		}
+	}
 
 unlock:
 	ocf_mngt_cache_unlock(cache);
@@ -1592,6 +1720,7 @@ int cache_mngt_remove_inactive_core(struct kcas_remove_inactive *cmd)
 	int result = 0;
 	ocf_cache_t cache;
 	ocf_core_t core;
+	struct cache_priv *cache_priv = NULL;
 
 	result = mngt_get_cache_by_id(cas_ctx, cmd->cache_id, &cache);
 	if (result)
@@ -1636,6 +1765,12 @@ int cache_mngt_remove_inactive_core(struct kcas_remove_inactive *cmd)
 
 	if (!result) {
 		mark_core_id_free(cache, cmd->core_id);
+		cache_priv = ocf_cache_get_priv(cache);
+		if (cache_priv->fs_meta_dict[cmd->core_id].length && cache_priv->fs_meta_dict[cmd->core_id].data) {
+			vfree(cache_priv->fs_meta_dict[cmd->core_id].data);
+			cache_priv->fs_meta_dict[cmd->core_id].data = NULL;
+			cache_priv->fs_meta_dict[cmd->core_id].length = 0;
+		}
 	}
 
 unlock:
@@ -1770,18 +1905,16 @@ out_get:
 	return result;
 }
 
-static int _cache_mngt_create_core_exp_obj(ocf_core_t core, void *cntx)
+static int _cache_mngt_create_core_exported_object(ocf_core_t core, void *cntx)
 {
 	int result;
 
 	result = kcas_core_create_exported_object(core);
-	if (result)
-		return result;
 
 	return result;
 }
 
-static int _cache_mngt_destroy_core_exp_obj(ocf_core_t core, void *cntx)
+static int _cache_mngt_destroy_core_exported_object(ocf_core_t core, void *cntx)
 {
 	if (kcas_core_destroy_exported_object(core)) {
 		ocf_cache_t cache = ocf_core_get_cache(core);
@@ -1798,23 +1931,23 @@ static int cache_mngt_initialize_core_exported_objects(ocf_cache_t cache)
 {
 	int result;
 
-	result = ocf_core_visit(cache, _cache_mngt_create_core_exp_obj, NULL,
+	result = ocf_core_visit(cache, _cache_mngt_create_core_exported_object, NULL,
 			true);
 	if (result) {
 		/* Need to cleanup */
-		ocf_core_visit(cache, _cache_mngt_destroy_core_exp_obj, NULL,
+		ocf_core_visit(cache, _cache_mngt_destroy_core_exported_object, NULL,
 				true);
 	}
 
 	return result;
 }
 
-static int cache_mngt_destroy_cache_exp_obj(ocf_cache_t cache)
+static int cache_mngt_destroy_cache_exported_object(ocf_cache_t cache)
 {
 	struct cache_priv *cache_priv = ocf_cache_get_priv(cache);
 	int ret;
 
-	if (!cache_priv->cache_exp_obj_initialized)
+	if (!cache_priv->cache_exported_object_initialized)
 		return 0;
 
 	ret = kcas_cache_destroy_exported_object(cache);
@@ -1823,7 +1956,7 @@ static int cache_mngt_destroy_cache_exp_obj(ocf_cache_t cache)
 		printk(KERN_ERR "Cannot destroy %s exported object\n",
 				ocf_cache_get_name(cache));
 	} else {
-		cache_priv->cache_exp_obj_initialized = false;
+		cache_priv->cache_exported_object_initialized = false;
 	}
 
 	return ret;
@@ -1838,7 +1971,7 @@ static int cache_mngt_initialize_cache_exported_object(ocf_cache_t cache)
 	if (result)
 		return result;
 
-	cache_priv->cache_exp_obj_initialized = true;
+	cache_priv->cache_exported_object_initialized = true;
 
 	return 0;
 }
@@ -1847,29 +1980,11 @@ static int cache_mngt_create_cache_device_cfg(
 		struct ocf_mngt_cache_device_config *cfg, char *cache_path)
 {
 	int result = 0;
-	int path_length = strnlen(cache_path, MAX_STR_LEN);
-	struct ocf_volume_uuid uuid;
 	ocf_volume_t volume;
-	ocf_volume_type_t volume_type;
-	uint8_t volume_type_id;
 
 	memset(cfg, 0, sizeof(*cfg));
 
-	if (path_length == MAX_STR_LEN || path_length == 0)
-		return -OCF_ERR_INVAL;
-
-	result = cas_blk_identify_type(cache_path, &volume_type_id);
-	if (result)
-		return result;
-
-	volume_type = ocf_ctx_get_volume_type(cas_ctx, volume_type_id);
-	if (!volume_type)
-		return -OCF_ERR_INVAL;
-
-	uuid.data = cache_path;
-	uuid.size = path_length + 1;
-
-	result = ocf_volume_create(&volume, volume_type, &uuid);
+	result = cas_create_volume_by_path(&volume, ocf_volume_form_cache, cache_path);
 	if (result)
 		return result;
 
@@ -1924,7 +2039,7 @@ int cache_mngt_create_cache_cfg(struct ocf_mngt_cache_config *cfg,
 {
 	int init_cache, result;
 	char cache_name[OCF_CACHE_NAME_SIZE];
-	uint16_t cache_id;
+	uint32_t cache_id;
 
 	switch (cmd->init_cache) {
 		case CACHE_INIT_STANDBY_NEW:
@@ -2016,20 +2131,43 @@ static void _cache_mngt_log_cache_device_path(ocf_cache_t cache,
 
 static void _cas_queue_kick(ocf_queue_t q)
 {
-	return cas_kick_queue_thread(q);
+	cas_kick_queue_thread(q);
 }
 
 static void _cas_queue_stop(ocf_queue_t q)
 {
-	return cas_stop_queue_thread(q);
+	cas_stop_queue_thread(q);
 }
-
 
 const struct ocf_queue_ops queue_ops = {
 	.kick = _cas_queue_kick,
 	.stop = _cas_queue_stop,
 };
 
+int cas_init_mngt_queue_thread(ocf_cache_t cache, ocf_queue_t q, int cpu)
+{
+	const char *cache_num = ocf_cache_get_name(cache) + 5;
+	char name[48] = {};
+	snprintf(name, sizeof(name), "cas_mngt_%s", cache_num);
+
+	return cas_create_queue_thread(q, name, cpu);
+}
+int cas_init_io_queue_thread(ocf_cache_t cache, ocf_queue_t q, int cpu)
+{
+	const char *cache_num = ocf_cache_get_name(cache) + 5;
+	char name[48] = {};
+	snprintf(name, sizeof(name), "cas_io_%s", cache_num);
+
+	return cas_create_queue_thread(q, name, cpu);
+}
+int cas_init_porter_queue_thread(ocf_cache_t cache, ocf_queue_t q, int cpu)
+{
+	const char *cache_num = ocf_cache_get_name(cache) + 5;
+	char name[48] = {};
+	snprintf(name, sizeof(name), "cas_porter_%s", cache_num);
+
+	return cas_create_queue_thread(q, name, cpu);
+}
 static int _cache_mngt_start_queues(ocf_cache_t cache)
 {
 	uint32_t cpus_no = num_online_cpus();
@@ -2039,36 +2177,55 @@ static int _cache_mngt_start_queues(ocf_cache_t cache)
 	cache_priv = ocf_cache_get_priv(cache);
 
 	for (i = 0; i < cpus_no; i++) {
-		result = ocf_queue_create(cache, &cache_priv->io_queues[i],
+		result = ocf_queue_create(cache, &cache_priv->queues[i].worker_queue,
 				&queue_ops);
 		if (result)
-			goto err;
+			goto err_worker_queue;
 
-		result = cas_create_queue_thread(cache,
-				cache_priv->io_queues[i], i);
+		result = cas_init_io_queue_thread(cache, cache_priv->queues[i].worker_queue, i);
 		if (result) {
-			ocf_queue_put(cache_priv->io_queues[i]);
-			goto err;
+			ocf_queue_put(cache_priv->queues[i].worker_queue);
+			goto err_worker_queue;
+		}
+	}
+
+	for (i = 0; i < cpus_no; i++) {
+		result = ocf_queue_create(cache, &cache_priv->queues[i].porter_queue,
+				&queue_ops);
+		if (result)
+			goto err_porter_queue;
+
+		result = cas_init_porter_queue_thread(cache, cache_priv->queues[i].porter_queue, i);
+		if (result) {
+			ocf_queue_put(cache_priv->queues[i].porter_queue);
+			goto err_porter_queue;
 		}
 	}
 
 	result = ocf_queue_create_mngt(cache, &cache_priv->mngt_queue,
 			&queue_ops);
 	if (result)
-		goto err;
+		goto err_porter_queue;
 
-	result = cas_create_queue_thread(cache,
-			cache_priv->mngt_queue, CAS_CPUS_ALL);
+	result = cas_init_mngt_queue_thread(cache, cache_priv->mngt_queue, CAS_CPUS_ALL);
 	if (result) {
-		ocf_queue_put(cache_priv->mngt_queue);
-		cache_priv->mngt_queue = NULL;
-		goto err;
+		goto err_mngt_queue;
 	}
 
 	return 0;
-err:
+
+err_mngt_queue:
+	ocf_queue_put(cache_priv->mngt_queue);
+	cache_priv->mngt_queue = NULL;
+	i = cpus_no;
+err_porter_queue:
 	while (--i >= 0)
-		ocf_queue_put(cache_priv->io_queues[i]);
+		ocf_queue_put(cache_priv->queues[i].porter_queue);
+	i = cpus_no;
+err_worker_queue:
+	while (--i >= 0) {
+		ocf_queue_put(cache_priv->queues[i].worker_queue);
+	}
 
 	return result;
 }
@@ -2079,7 +2236,6 @@ static void init_instance_complete(struct _cache_mngt_attach_context *ctx,
 	ocf_volume_t cache_obj;
 	struct bd_object *bd_cache_obj;
 	struct block_device *bdev;
-	//const char *name;
 
 	cache_obj = ocf_cache_get_volume(cache);
 	BUG_ON(!cache_obj);
@@ -2175,7 +2331,7 @@ static int _cache_mngt_cache_priv_init(ocf_cache_t cache)
 	uint32_t cpus_no = num_online_cpus();
 
 	cache_priv = vzalloc(sizeof(*cache_priv) +
-			cpus_no * sizeof(*cache_priv->io_queues));
+			cpus_no * sizeof(*cache_priv->queues));
 	if (!cache_priv)
 		return -ENOMEM;
 
@@ -2330,7 +2486,7 @@ static int _cache_start_finalize(ocf_cache_t cache, int init_mode,
 	}
 
 	if (activate)
-		cache_mngt_destroy_cache_exp_obj(cache);
+		cache_mngt_destroy_cache_exported_object(cache);
 
 	/* after destroying exported object activate should follow
 	 * load path */
@@ -2466,12 +2622,12 @@ int cache_mngt_standby_detach(struct kcas_standby_detach *cmd)
 	}
 
 	cache_priv = ocf_cache_get_priv(cache);
-	if (!cache_priv->cache_exp_obj_initialized) {
+	if (!cache_priv->cache_exported_object_initialized) {
 		result = -KCAS_ERR_STANDBY_DETACHED;
 		goto out_cache_put;
 	}
 
-	result = cache_mngt_destroy_cache_exp_obj(cache);
+	result = cache_mngt_destroy_cache_exported_object(cache);
 	if (result)
 		goto out_cache_put;
 
@@ -2693,6 +2849,27 @@ finalize_err:
 	return result;
 }
 
+static bool _has_fs_meta_cb(ocf_cache_t cache, ocf_core_id_t core_id, uint64_t lba_beg, uint64_t lba_end, void *args)
+{
+	struct cache_priv *cache_priv = ocf_cache_get_priv(cache);
+	struct fs_meta_map *map = &cache_priv->fs_meta_dict[core_id];
+	struct fs_meta_lba *lba_table = map->data;
+	uint32_t lba_count = map->length / sizeof(struct fs_meta_lba);
+	uint32_t i;
+
+	if (lba_table == NULL || lba_count == 0)
+		return false;
+
+	for (i = 0; i < lba_count; i++) {
+		if (lba_end <= (lba_table[i].lba_beg * (1ULL << 12)))
+			break;
+		if (lba_beg >= (lba_table[i].lba_end * (1ULL << 12)))
+			continue;
+		return true;
+	}
+	return false;
+}
+
 int cache_mngt_init_instance(struct ocf_mngt_cache_config *cfg,
 		struct ocf_mngt_cache_attach_config *attach_cfg,
 		struct kcas_start_cache *cmd)
@@ -2704,6 +2881,7 @@ int cache_mngt_init_instance(struct ocf_mngt_cache_config *cfg,
 	int result = 0, rollback_result = 0;
 	ocf_cache_mode_t cache_mode_meta;
 	ocf_cache_line_size_t cache_line_size_meta;
+	uint16_t i;
 
 	switch (cmd->init_cache) {
 		case CACHE_INIT_STANDBY_NEW:
@@ -2816,6 +2994,7 @@ int cache_mngt_init_instance(struct ocf_mngt_cache_config *cfg,
 
 	cache_priv = ocf_cache_get_priv(cache);
 	cache_priv->attach_context = context;
+	ocf_cache_set_hook_has_fs_meta(cache, _has_fs_meta_cb, NULL);
 
 	switch (cmd->init_cache) {
 	case CACHE_INIT_NEW:
@@ -2823,6 +3002,13 @@ int cache_mngt_init_instance(struct ocf_mngt_cache_config *cfg,
 				_cache_mngt_start_complete, context);
 		break;
 	case CACHE_INIT_LOAD:
+		for (i = 0; i < OCF_CORE_MAX; i ++) {
+			if (cmd->fs_meta_dict[i].length && cmd->fs_meta_dict[i].data) {
+				cache_priv->fs_meta_dict[i].data = vmalloc(cmd->fs_meta_dict[i].length);
+				memcpy(cache_priv->fs_meta_dict[i].data, cmd->fs_meta_dict[i].data, cmd->fs_meta_dict[i].length);
+				cache_priv->fs_meta_dict[i].length = cmd->fs_meta_dict[i].length;
+			}
+		}
 		ocf_mngt_cache_load(cache, attach_cfg,
 				_cache_mngt_start_complete, context);
 		break;
@@ -3257,7 +3443,7 @@ int cache_mngt_exit_instance(const char *cache_name, size_t name_len, int flush)
 			goto stop_thread;
 		}
 	} else {
-		status = cache_mngt_destroy_cache_exp_obj(cache);
+		status = cache_mngt_destroy_cache_exported_object(cache);
 		if (status != 0) {
 			printk(KERN_WARNING
 					"Failed to remove cache exported object\n");
@@ -3306,7 +3492,7 @@ static int cache_mngt_list_caches_visitor(ocf_cache_t cache, void *cntx)
 {
 	struct cache_mngt_list_ctx *context = cntx;
 	struct kcas_cache_list *list = context->list;
-	uint16_t id;
+	uint32_t id;
 
 	BUG_ON(cache_id_from_name(&id, ocf_cache_get_name(cache)));
 
@@ -3354,6 +3540,55 @@ int cache_mngt_interrupt_flushing(const char *cache_name, size_t name_len)
 
 	return 0;
 
+}
+
+static int _cache_mngt_dump_inflight_all_core(ocf_core_t core, void *cntx)
+{
+	//uint16_t core_id = OCF_CORE_ID_INVALID;
+	//core_id_from_name(&core_id, ocf_core_get_name(core));
+
+	ocf_volume_t core_vol = ocf_core_get_volume(core);
+	ocf_volume_dump_inflight(core_vol);
+	return 0;
+}
+
+int cache_mngt_dump_inflight(uint32_t cache_id)
+{
+	ocf_cache_t cache;
+	ocf_volume_t cache_vol;
+	char cache_name[OCF_CACHE_NAME_SIZE] = {};
+	int result;
+
+	cache_name_from_id(cache_name, cache_id);
+	result = ocf_mngt_cache_get_by_name(cas_ctx, cache_name, OCF_CACHE_NAME_SIZE, &cache);
+	if (result) {
+		return result;
+	}
+
+	if (ocf_cache_is_standby(cache)) {
+		ocf_mngt_cache_put(cache);
+		return -OCF_ERR_CACHE_STANDBY;
+	}
+
+	result = _cache_mngt_lock_sync(cache);
+	if (result) {
+		ocf_mngt_cache_put(cache);
+		return result;
+	}
+
+	cache_vol = ocf_cache_get_volume(cache);
+	ocf_volume_dump_inflight(cache_vol);
+
+	result = ocf_core_visit(cache, _cache_mngt_dump_inflight_all_core, NULL, false);
+	if (result) {
+		ocf_mngt_cache_unlock(cache);
+		ocf_mngt_cache_put(cache);
+		return result;
+	}
+
+	ocf_mngt_cache_unlock(cache);
+	ocf_mngt_cache_put(cache);
+	return result;
 }
 
 int cache_mngt_get_stats(struct kcas_get_stats *stats)
@@ -3457,7 +3692,7 @@ put:
 int cache_mngt_get_io_class_info(struct kcas_io_class *part)
 {
 	int result;
-	uint16_t cache_id = part->cache_id;
+	uint32_t cache_id = part->cache_id;
 	uint32_t io_class_id = part->class_id;
 	ocf_cache_t cache;
 
@@ -3519,7 +3754,7 @@ int cache_mngt_get_core_info(struct kcas_core_info *info)
 
 	vol = ocf_core_get_volume(core);
 	bdvol = bd_object(vol);
-	info->exp_obj_exists = bdvol->expobj_valid;
+	info->exported_object_exists = bdvol->expobj_valid;
 
 unlock:
 	ocf_mngt_cache_read_unlock(cache);
@@ -3612,6 +3847,11 @@ int cache_mngt_set_cache_params(struct kcas_set_cache_param *info)
 		return result;
 
 	switch (info->param_id) {
+	case cache_param_cleaner_policy_control:
+		result = cache_mngt_set_cleaner_policy(cache,
+				info->param_value);
+		break;
+
 	case cache_param_cleaning_policy_type:
 		result = cache_mngt_set_cleaning_policy(cache,
 				info->param_value);
@@ -3622,9 +3862,9 @@ int cache_mngt_set_cache_params(struct kcas_set_cache_param *info)
 				ocf_cleaning_alru, ocf_alru_wake_up_time,
 				info->param_value);
 		break;
-	case cache_param_cleaning_alru_stale_buffer_time:
+	case cache_param_cleaning_alru_flush_split_unit:
 		result = cache_mngt_set_cleaning_param(cache,
-				ocf_cleaning_alru, ocf_alru_stale_buffer_time,
+				ocf_cleaning_alru, ocf_alru_flush_split_unit,
 				info->param_value);
 		break;
 	case cache_param_cleaning_alru_flush_max_buffers:
@@ -3637,10 +3877,20 @@ int cache_mngt_set_cache_params(struct kcas_set_cache_param *info)
 				ocf_cleaning_alru, ocf_alru_activity_threshold,
 				info->param_value);
 		break;
+	case cache_param_cleaning_alru_dirty_overflow_threshold:
+		result = cache_mngt_set_cleaning_param(cache,
+				ocf_cleaning_alru, ocf_alru_dirty_overflow_threshold,
+				info->param_value);
+		break;
 
 	case cache_param_cleaning_acp_wake_up_time:
 		result = cache_mngt_set_cleaning_param(cache,
 				ocf_cleaning_acp, ocf_acp_wake_up_time,
+				info->param_value);
+		break;
+	case cache_param_cleaning_acp_flush_split_unit:
+		result = cache_mngt_set_cleaning_param(cache,
+				ocf_cleaning_acp, ocf_acp_flush_split_unit,
 				info->param_value);
 		break;
 	case cache_param_cleaning_acp_flush_max_buffers:
@@ -3648,6 +3898,17 @@ int cache_mngt_set_cache_params(struct kcas_set_cache_param *info)
 				ocf_cleaning_acp, ocf_acp_flush_max_buffers,
 				info->param_value);
 		break;
+	case cache_param_cleaning_acp_activity_threshold:
+		result = cache_mngt_set_cleaning_param(cache,
+				ocf_cleaning_acp, ocf_acp_activity_threshold,
+				info->param_value);
+		break;
+	case cache_param_cleaning_acp_dirty_overflow_threshold:
+		result = cache_mngt_set_cleaning_param(cache,
+				ocf_cleaning_acp, ocf_acp_dirty_overflow_threshold,
+				info->param_value);
+		break;
+
 	case cache_param_promotion_policy_type:
 		result = cache_mngt_set_promotion_policy(cache, info->param_value);
 		break;
@@ -3677,6 +3938,21 @@ int cache_mngt_get_cache_params(struct kcas_get_cache_param *info)
 		return result;
 
 	switch (info->param_id) {
+	case cache_param_get_dirty_meta_chunk:
+		result = cache_mngt_get_dirty_meta_chunk(cache,
+				&info->param_value);
+		break;
+
+	case cache_param_get_dirty_data_chunk:
+		result = cache_mngt_get_dirty_data_chunk(cache,
+				&info->param_value);
+		break;
+
+	case cache_param_cleaner_policy_control:
+		result = cache_mngt_get_cleaner_policy(cache,
+				&info->param_value);
+		break;
+
 	case cache_param_cleaning_policy_type:
 		result = cache_mngt_get_cleaning_policy(cache,
 				&info->param_value);
@@ -3686,9 +3962,9 @@ int cache_mngt_get_cache_params(struct kcas_get_cache_param *info)
 				ocf_cleaning_alru, ocf_alru_wake_up_time,
 				&info->param_value);
 		break;
-	case cache_param_cleaning_alru_stale_buffer_time:
+	case cache_param_cleaning_alru_flush_split_unit:
 		result = cache_mngt_get_cleaning_param(cache,
-				ocf_cleaning_alru, ocf_alru_stale_buffer_time,
+				ocf_cleaning_alru, ocf_alru_flush_split_unit,
 				&info->param_value);
 		break;
 	case cache_param_cleaning_alru_flush_max_buffers:
@@ -3701,10 +3977,20 @@ int cache_mngt_get_cache_params(struct kcas_get_cache_param *info)
 				ocf_cleaning_alru, ocf_alru_activity_threshold,
 				&info->param_value);
 		break;
+	case cache_param_cleaning_alru_dirty_overflow_threshold:
+		result = cache_mngt_get_cleaning_param(cache,
+				ocf_cleaning_alru, ocf_alru_dirty_overflow_threshold,
+				&info->param_value);
+		break;
 
 	case cache_param_cleaning_acp_wake_up_time:
 		result = cache_mngt_get_cleaning_param(cache,
 				ocf_cleaning_acp, ocf_acp_wake_up_time,
+				&info->param_value);
+		break;
+	case cache_param_cleaning_acp_flush_split_unit:
+		result = cache_mngt_get_cleaning_param(cache,
+				ocf_cleaning_acp, ocf_acp_flush_split_unit,
 				&info->param_value);
 		break;
 	case cache_param_cleaning_acp_flush_max_buffers:
@@ -3712,6 +3998,17 @@ int cache_mngt_get_cache_params(struct kcas_get_cache_param *info)
 				ocf_cleaning_acp, ocf_acp_flush_max_buffers,
 				&info->param_value);
 		break;
+	case cache_param_cleaning_acp_activity_threshold:
+		result = cache_mngt_get_cleaning_param(cache,
+				ocf_cleaning_acp, ocf_acp_activity_threshold,
+				&info->param_value);
+		break;
+	case cache_param_cleaning_acp_dirty_overflow_threshold:
+		result = cache_mngt_get_cleaning_param(cache,
+				ocf_cleaning_acp, ocf_acp_dirty_overflow_threshold,
+				&info->param_value);
+		break;
+
 	case cache_param_promotion_policy_type:
 		result = cache_mngt_get_promotion_policy(cache, &info->param_value);
 		break;

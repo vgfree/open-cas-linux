@@ -39,7 +39,7 @@ extern cas_printf_t cas_printf;
 /* struct with all the commands parameters/flags with default values */
 struct command_args{
 	int force;
-	int cache_id;
+	uint32_t cache_id;
 	int core_id;
 	int state;
 	int cache_mode;
@@ -58,6 +58,8 @@ struct command_args{
 	int no_flush;
 	const char* cache_device;
 	const char* core_device;
+	const char* fs_meta_map_file;
+	const char* fs_meta_map_files;
 	uint32_t params_type;
 	uint32_t params_count;
 	bool verbose;
@@ -85,6 +87,8 @@ static struct command_args command_args_values = {
 		.no_flush = false,
 		.cache_device = NULL,
 		.core_device = NULL,
+		.fs_meta_map_file = NULL,
+		.fs_meta_map_files = NULL,
 		.by_id_path = false,
 
 		.params_type = 0,
@@ -111,7 +115,7 @@ int command_handle_option(char *opt, const char **arg)
 				OCF_CACHE_ID_MAX) == FAILURE)
 			return FAILURE;
 
-		command_args_values.cache_id = atoi(arg[0]);
+		command_args_values.cache_id = strtoul(arg[0], NULL, 10);
 	} else if (!strcmp(opt, "core-id")) {
 		if (validate_str_num(arg[0], "core id", 0, OCF_CORE_ID_MAX) == FAILURE)
 			return FAILURE;
@@ -127,6 +131,11 @@ int command_handle_option(char *opt, const char **arg)
 			return FAILURE;
 
 		command_args_values.cache_device = arg[0];
+	} else if (!strcmp(opt, "fs-meta-map-file")) {
+		if (validate_path(arg[0], 1))
+			return FAILURE;
+
+		command_args_values.fs_meta_map_file = arg[0];
 	} else if (!strcmp(opt, "no-data-flush")) {
 		command_args_values.flush_data = 0;
 	} else if (!strcmp(opt, "output-format")) {
@@ -241,7 +250,7 @@ int remove_core_command_handle_option(char *opt, const char **arg)
 		if (validate_str_num(arg[0], "cache id", OCF_CACHE_ID_MIN, OCF_CACHE_ID_MAX) == FAILURE)
 			return FAILURE;
 
-		command_args_values.cache_id = atoi(arg[0]);
+		command_args_values.cache_id = strtoul(arg[0], NULL, 10);
 	} else if (!strcmp(opt, "core-id")){
 		if (validate_str_num(arg[0], "core id", 0, OCF_CORE_ID_MAX) == FAILURE)
 			return FAILURE;
@@ -276,7 +285,7 @@ int start_cache_command_handle_option(char *opt, const char **arg)
 		if (validate_str_num(arg[0], "cache id", OCF_CACHE_ID_MIN, OCF_CACHE_ID_MAX) == FAILURE)
 			return FAILURE;
 
-		command_args_values.cache_id = atoi(arg[0]);
+		command_args_values.cache_id = strtoul(arg[0], NULL, 10);
 	} else if (!strcmp(opt, "load")) {
 
 		command_args_values.state = CACHE_INIT_LOAD;
@@ -285,6 +294,8 @@ int start_cache_command_handle_option(char *opt, const char **arg)
 			return FAILURE;
 
 		command_args_values.cache_device = arg[0];
+	} else if (!strcmp(opt, "fs-meta-map-files")) {
+		command_args_values.fs_meta_map_files = arg[0];
 	} else if (!strcmp(opt, "cache-mode")) {
 		command_args_values.cache_mode =
 				validate_str_cache_mode((const char*)arg[0]);
@@ -302,6 +313,18 @@ int start_cache_command_handle_option(char *opt, const char **arg)
 	return 0;
 }
 
+int dump_inflight_command_handle_option(char *opt, const char **arg)
+{
+	if (!strcmp(opt, "cache-id")) {
+		if (validate_str_num(arg[0], "cache id", OCF_CACHE_ID_MIN, OCF_CACHE_ID_MAX) == FAILURE)
+			return FAILURE;
+
+		command_args_values.cache_id = strtoul(arg[0], NULL, 10);
+	}
+
+	return 0;
+}
+
 #define xstr(s) str(s)
 #define str(s) #s
 
@@ -311,7 +334,7 @@ int start_cache_command_handle_option(char *opt, const char **arg)
 /* OCF_CORE_ID_MAX is defined by arithmetic operations on OCF_CORE_MAX. As a result there is no easy way
  * to stringify OCF_CORE_ID_MAX. To work around this, additional definition for max core id is introduced here.
  * In case of mismatch between header and local definition preprocessor error is triggered. */
-#define _CASADM_CORE_ID_MAX 4095
+#define _CASADM_CORE_ID_MAX 63
 #if (_CASADM_CORE_ID_MAX != OCF_CORE_ID_MAX)
 #error "Max core id definitions discrepancy. Please update above definition."
 #endif
@@ -329,13 +352,7 @@ static cli_option start_options[] = {
 	{'f', "force", "Force the creation of cache instance"},
 	{'c', "cache-mode", "Set cache mode from available: {"CAS_CLI_HELP_START_CACHE_MODES"} "CAS_CLI_HELP_START_CACHE_MODES_FULL"; without this parameter Write-Through will be set by default", 1, "NAME"},
 	{'x', "cache-line-size", CACHE_LINE_SIZE_DESC, 1, "NUMBER",  CLI_OPTION_DEFAULT_INT, 0, 0, ocf_cache_line_size_default / KiB},
-	{0}
-};
-
-static cli_option attach_cache_options[] = {
-	{'d', "cache-device", CACHE_DEVICE_DESC, 1, "DEVICE", CLI_OPTION_REQUIRED},
-	{'i', "cache-id", CACHE_ID_DESC_LONG, 1, "ID", CLI_OPTION_REQUIRED},
-	{'f', "force", "Force attaching the cache device"},
+	{'m', "fs-meta-map-files", "fs meta map files", 1, "FILES", CLI_OPTION_OPTIONAL_ARG},
 	{0}
 };
 
@@ -412,13 +429,20 @@ int validate_cache_path(const char* path, bool force)
 	return SUCCESS;
 }
 
+static cli_option attach_cache_options[] = {
+	{'d', "cache-device", CACHE_DEVICE_DESC, 1, "DEVICE", CLI_OPTION_REQUIRED},
+	{'i', "cache-id", CACHE_ID_DESC_LONG, 1, "ID", CLI_OPTION_REQUIRED},
+	{'f', "force", "Force attaching the cache device"},
+	{0}
+};
+
 int handle_cache_attach(void)
 {
 	return attach_cache(
 			command_args_values.cache_id,
 			command_args_values.cache_device,
-			command_args_values.force
-			);
+			command_args_values.force,
+			NULL);
 }
 
 int handle_cache_detach(void)
@@ -460,7 +484,7 @@ int handle_start()
 			command_args_values.cache_device,
 			command_args_values.cache_mode,
 			command_args_values.line_size,
-			command_args_values.force);
+			command_args_values.force, command_args_values.fs_meta_map_files);
 
 	return status;
 }
@@ -495,7 +519,7 @@ int stats_command_handle_option(char *opt, const char **arg)
 				OCF_CACHE_ID_MAX) == FAILURE)
 			return FAILURE;
 
-		command_args_values.cache_id = atoi(arg[0]);
+		command_args_values.cache_id = strtoul(arg[0], NULL, 10);
 	} else if (!strcmp(opt, "core-id")) {
 		if (validate_str_num(arg[0], "core id", 0,
 				     OCF_CORE_ID_MAX) == FAILURE)
@@ -557,6 +581,16 @@ int handle_stop()
 {
 	return stop_cache(command_args_values.cache_id,
 			command_args_values.flush_data);
+}
+
+static cli_option dump_options[] = {
+	{'i', "cache-id", CACHE_ID_DESC_LONG, 1, "ID", 0},
+	{0}
+};
+
+int handle_dump_inflight()
+{
+	return dump_inflight_of_cache(command_args_values.cache_id);
 }
 
 /*****************************************************************************
@@ -633,7 +667,7 @@ static int core_param_handle_option_generic(char *opt, const char **arg, int (*h
 			return FAILURE;
 		}
 
-		command_args_values.cache_id = atoi(arg[0]);
+		command_args_values.cache_id = strtoul(arg[0], NULL, 10);
 	} else if (!strcmp(opt, "core-id")) {
 		if (validate_str_num(arg[0], "core id", OCF_CORE_ID_MIN,
 				OCF_CORE_ID_MAX) == FAILURE)
@@ -657,7 +691,7 @@ static int cache_param_handle_option_generic(char *opt, const char **arg, int (*
 			return FAILURE;
 		}
 
-		command_args_values.cache_id = atoi(arg[0]);
+		command_args_values.cache_id = strtoul(arg[0], NULL, 10);
 	} else {
 		return handler ? handler(opt, arg) : FAILURE;
 	}
@@ -697,6 +731,12 @@ static struct cas_param cas_core_params[] = {
 	{0},
 };
 
+static char *cleaner_policy_control_values[] = {
+	[OCF_CLEANER_ON] = "on",
+	[OCF_CLEANER_OFF] = "off",
+	NULL,
+};
+
 static char *cleaning_policy_type_values[] = {
 	[ocf_cleaning_nop] = "nop",
 	[ocf_cleaning_alru] = "alru",
@@ -711,6 +751,22 @@ static char *promotion_policy_type_values[] = {
 };
 
 static struct cas_param cas_cache_params[] = {
+	/* get dirty meta chunk */
+	[cache_param_get_dirty_meta_chunk] = {
+		.name = "get dirty meta chunk" ,
+	},
+
+	/* get dirty data chunk */
+	[cache_param_get_dirty_data_chunk] = {
+		.name = "get dirty data chunk" ,
+	},
+
+	/* Cleaner policy control */
+	[cache_param_cleaner_policy_control] = {
+		.name = "Cleaner policy control" ,
+		.value_names = cleaner_policy_control_values,
+	},
+
 	/* Cleaning policy type */
 	[cache_param_cleaning_policy_type] = {
 		.name = "Cleaning policy type" ,
@@ -719,10 +775,10 @@ static struct cas_param cas_cache_params[] = {
 
 	/* Cleaning policy ALRU params */
 	[cache_param_cleaning_alru_wake_up_time] = {
-		.name = "Wake up time [s]" ,
+		.name = "Wake up time [ms]" ,
 	},
-	[cache_param_cleaning_alru_stale_buffer_time] = {
-		.name = "Stale buffer time [s]" ,
+	[cache_param_cleaning_alru_flush_split_unit] = {
+		.name = "Flush split unit" ,
 	},
 	[cache_param_cleaning_alru_flush_max_buffers] = {
 		.name = "Flush max buffers" ,
@@ -730,13 +786,25 @@ static struct cas_param cas_cache_params[] = {
 	[cache_param_cleaning_alru_activity_threshold] = {
 		.name = "Activity threshold [ms]" ,
 	},
+	[cache_param_cleaning_alru_dirty_overflow_threshold] = {
+		.name = "Dirty overflow threshold [%]" ,
+	},
 
 	/* Cleaning policy ACP params */
 	[cache_param_cleaning_acp_wake_up_time] = {
 		.name = "Wake up time [ms]" ,
 	},
+	[cache_param_cleaning_acp_flush_split_unit] = {
+		.name = "Flush split unit" ,
+	},
 	[cache_param_cleaning_acp_flush_max_buffers] = {
 		.name = "Flush max buffers" ,
+	},
+	[cache_param_cleaning_acp_activity_threshold] = {
+		.name = "Activity threshold [ms]" ,
+	},
+	[cache_param_cleaning_acp_dirty_overflow_threshold] = {
+		.name = "Dirty overflow threshold [%]" ,
 	},
 
 	/* Promotion policy type */
@@ -764,19 +832,30 @@ static struct cas_param cas_cache_params[] = {
 	"Available policies: {always|full|never}"
 #define SEQ_CUT_OFF_PROMO_COUNT_DESC "Sequential cutoff stream promotion request count threshold"
 
+#define CLEANER_CONTROL_DESC "Cleaner control. " \
+	"Available policies: {on|off}"
+
 #define CLEANING_POLICY_TYPE_DESC "Cleaning policy type. " \
 	"Available policy types: {nop|alru|acp}"
 
-#define CLEANING_ALRU_WAKE_UP_DESC "Cleaning thread sleep time after an idle wake up <%d-%d>[s] (default: %d s)"
-#define CLEANING_ALRU_STALENESS_TIME_DESC "Time that has to pass from the last write operation before a dirty cache" \
-	 " block can be scheduled to be flushed <%d-%d>[s] (default: %d s)"
+#define CLEANING_ALRU_WAKE_UP_DESC "Time between ALRU cleaning thread iterations <%d-%d>[ms] (default: %d ms)"
 #define CLEANING_ALRU_FLUSH_MAX_BUFFERS_DESC "Number of dirty cache blocks to be flushed in one cleaning cycle" \
 	" <%d-%d> (default: %d)"
 #define CLEANING_ALRU_ACTIVITY_THRESHOLD_DESC "Cache idle time before flushing thread can start <%d-%d>[ms]" \
 	" (default: %d ms)"
+#define CLEANING_ALRU_DIRTY_OVERFLOW_THRESHOLD_DESC "Cache flush no idle when dirty overflow <%d-%d>[%%]" \
+	" (default: %d %%)"
+#define CLEANING_ALRU_FLUSH_SPLIT_UNIT_DESC "Unit of dirty cache blocks to be splited in each flushed" \
+	" <%d-%d> (default: %d)"
 
 #define CLEANING_ACP_WAKE_UP_DESC "Time between ACP cleaning thread iterations <%d-%d>[ms] (default: %d ms)"
-#define CLEANING_ACP_MAX_BUFFERS_DESC "Number of cache lines flushed in single ACP cleaning thread iteration" \
+#define CLEANING_ACP_FLUSH_MAX_BUFFERS_DESC "Number of dirty cache blocks to be flushed in one cleaning cycle" \
+	" <%d-%d> (default: %d)"
+#define CLEANING_ACP_ACTIVITY_THRESHOLD_DESC "Cache idle time before flushing thread can start <%d-%d>[ms]" \
+	" (default: %d ms)"
+#define CLEANING_ACP_DIRTY_OVERFLOW_THRESHOLD_DESC "Cache flush no idle when dirty overflow <%d-%d>[%%]" \
+	" (default: %d %%)"
+#define CLEANING_ACP_FLUSH_SPLIT_UNIT_DESC "Unit of dirty cache blocks to be splited in each flushed" \
 	" <%d-%d> (default: %d)"
 
 #define PROMOTION_POLICY_TYPE_DESC "Promotion policy type. "\
@@ -797,6 +876,10 @@ static cli_namespace set_param_namespace = {
 			{'p', "policy", SEQ_CUT_OFF_POLICY_DESC, 1, "POLICY", 0},
 			{0, "promotion-count", SEQ_CUT_OFF_PROMO_COUNT_DESC, 1, "NUMBER", 0},
 		CORE_PARAMS_NS_END()
+
+		CACHE_PARAMS_NS_BEGIN("cleaner", "Cleaner policy parameters")
+			{'p', "policy", CLEANER_CONTROL_DESC, 1, "POLICY", 0},
+		CACHE_PARAMS_NS_END()
 
 		CACHE_PARAMS_NS_BEGIN("cleaning", "Cleaning policy parameters")
 			{'p', "policy", CLEANING_POLICY_TYPE_DESC, 1, "POLICY", 0},
@@ -822,18 +905,22 @@ static cli_namespace set_param_namespace = {
 				CLI_OPTION_RANGE_INT | CLI_OPTION_DEFAULT_INT,
 				OCF_ALRU_MIN_WAKE_UP, OCF_ALRU_MAX_WAKE_UP,
 				OCF_ALRU_DEFAULT_WAKE_UP},
-			{'s', "staleness-time", CLEANING_ALRU_STALENESS_TIME_DESC, 1, "NUMBER",
+			{'u', "flush-split-unit", CLEANING_ALRU_FLUSH_SPLIT_UNIT_DESC, 1, "NUMBER",
 				CLI_OPTION_RANGE_INT | CLI_OPTION_DEFAULT_INT,
-				OCF_ALRU_MIN_STALENESS_TIME, OCF_ALRU_MAX_STALENESS_TIME,
-				OCF_ALRU_DEFAULT_STALENESS_TIME},
+				OCF_ALRU_MIN_FLUSH_SPLIT_UNIT, OCF_ALRU_MAX_FLUSH_SPLIT_UNIT,
+				OCF_ALRU_DEFAULT_FLUSH_SPLIT_UNIT},
 			{'b', "flush-max-buffers", CLEANING_ALRU_FLUSH_MAX_BUFFERS_DESC, 1, "NUMBER",
 				CLI_OPTION_RANGE_INT | CLI_OPTION_DEFAULT_INT,
 				OCF_ALRU_MIN_FLUSH_MAX_BUFFERS, OCF_ALRU_MAX_FLUSH_MAX_BUFFERS,
 				OCF_ALRU_DEFAULT_FLUSH_MAX_BUFFERS},
-			{'t', "activity-threshold", CLEANING_ALRU_ACTIVITY_THRESHOLD_DESC, 1, "NUMBER",
+			{'a', "activity-threshold", CLEANING_ALRU_ACTIVITY_THRESHOLD_DESC, 1, "NUMBER",
 				CLI_OPTION_RANGE_INT | CLI_OPTION_DEFAULT_INT,
 				OCF_ALRU_MIN_ACTIVITY_THRESHOLD, OCF_ALRU_MAX_ACTIVITY_THRESHOLD,
 				OCF_ALRU_DEFAULT_ACTIVITY_THRESHOLD},
+			{'o', "dirty-overflow-threshold", CLEANING_ALRU_DIRTY_OVERFLOW_THRESHOLD_DESC, 1, "NUMBER",
+				CLI_OPTION_RANGE_INT | CLI_OPTION_DEFAULT_INT,
+				OCF_ALRU_MIN_DIRTY_OVERFLOW_THRESHOLD, OCF_ALRU_MAX_DIRTY_OVERFLOW_THRESHOLD,
+				OCF_ALRU_DEFAULT_DIRTY_OVERFLOW_THRESHOLD},
 		CACHE_PARAMS_NS_END()
 
 		CACHE_PARAMS_NS_BEGIN("cleaning-acp", "Cleaning policy ACP parameters")
@@ -841,10 +928,22 @@ static cli_namespace set_param_namespace = {
 				CLI_OPTION_RANGE_INT | CLI_OPTION_DEFAULT_INT,
 				OCF_ACP_MIN_WAKE_UP, OCF_ACP_MAX_WAKE_UP,
 				OCF_ACP_DEFAULT_WAKE_UP},
-			{'b', "flush-max-buffers", CLEANING_ACP_MAX_BUFFERS_DESC, 1, "NUMBER",
+			{'u', "flush-split-unit", CLEANING_ACP_FLUSH_SPLIT_UNIT_DESC, 1, "NUMBER",
+				CLI_OPTION_RANGE_INT | CLI_OPTION_DEFAULT_INT,
+				OCF_ACP_MIN_FLUSH_SPLIT_UNIT, OCF_ACP_MAX_FLUSH_SPLIT_UNIT,
+				OCF_ACP_DEFAULT_FLUSH_SPLIT_UNIT},
+			{'b', "flush-max-buffers", CLEANING_ACP_FLUSH_MAX_BUFFERS_DESC, 1, "NUMBER",
 				CLI_OPTION_RANGE_INT | CLI_OPTION_DEFAULT_INT,
 				OCF_ACP_MIN_FLUSH_MAX_BUFFERS, OCF_ACP_MAX_FLUSH_MAX_BUFFERS,
 				OCF_ACP_DEFAULT_FLUSH_MAX_BUFFERS},
+			{'a', "activity-threshold", CLEANING_ACP_ACTIVITY_THRESHOLD_DESC, 1, "NUMBER",
+				CLI_OPTION_RANGE_INT | CLI_OPTION_DEFAULT_INT,
+				OCF_ACP_MIN_ACTIVITY_THRESHOLD, OCF_ACP_MAX_ACTIVITY_THRESHOLD,
+				OCF_ACP_DEFAULT_ACTIVITY_THRESHOLD},
+			{'o', "dirty-overflow-threshold", CLEANING_ACP_DIRTY_OVERFLOW_THRESHOLD_DESC, 1, "NUMBER",
+				CLI_OPTION_RANGE_INT | CLI_OPTION_DEFAULT_INT,
+				OCF_ACP_MIN_DIRTY_OVERFLOW_THRESHOLD, OCF_ACP_MAX_DIRTY_OVERFLOW_THRESHOLD,
+				OCF_ACP_DEFAULT_DIRTY_OVERFLOW_THRESHOLD},
 		CACHE_PARAMS_NS_END()
 
 		{0},
@@ -888,6 +987,26 @@ int set_param_seq_cutoff_handle_option(char *opt, const char **arg)
 	return SUCCESS;
 }
 
+int set_param_cleaner_handle_option(char *opt, const char **arg)
+{
+	if (!strcmp(opt, "policy")) {
+		if (!strcmp("on", arg[0])) {
+			SET_CACHE_PARAM(cache_param_cleaner_policy_control,
+					OCF_CLEANER_ON);
+		} else if (!strcmp("off", arg[0])) {
+			SET_CACHE_PARAM(cache_param_cleaner_policy_control,
+					OCF_CLEANER_OFF);
+		} else {
+			cas_printf(LOG_ERR, "Error: Invalid policy name.\n");
+			return FAILURE;
+		}
+	} else {
+		return FAILURE;
+	}
+
+	return SUCCESS;
+}
+
 int set_param_cleaning_handle_option(char *opt, const char **arg)
 {
 	if (!strcmp(opt, "policy")) {
@@ -921,13 +1040,13 @@ int set_param_cleaning_alru_handle_option(char *opt, const char **arg)
 
 		SET_CACHE_PARAM(cache_param_cleaning_alru_wake_up_time,
 				strtoul(arg[0], NULL, 10));
-	} else if (!strcmp(opt, "staleness-time")) {
-		if (validate_str_num(arg[0], "staleness time",
-				OCF_ALRU_MIN_STALENESS_TIME, OCF_ALRU_MAX_STALENESS_TIME)) {
+	} else if (!strcmp(opt, "flush-split-unit")) {
+		if (validate_str_num(arg[0], "flush split unit",
+				OCF_ALRU_MIN_FLUSH_SPLIT_UNIT, OCF_ALRU_MAX_FLUSH_SPLIT_UNIT)) {
 			return FAILURE;
 		}
 
-		SET_CACHE_PARAM(cache_param_cleaning_alru_stale_buffer_time,
+		SET_CACHE_PARAM(cache_param_cleaning_alru_flush_split_unit,
 				strtoul(arg[0], NULL, 10));
 	} else if (!strcmp(opt, "flush-max-buffers")) {
 		if (validate_str_num(arg[0], "flush max buffers",
@@ -944,6 +1063,14 @@ int set_param_cleaning_alru_handle_option(char *opt, const char **arg)
 		}
 
 		SET_CACHE_PARAM(cache_param_cleaning_alru_activity_threshold,
+				strtoul(arg[0], NULL, 10));
+	} else if (!strcmp(opt, "dirty-overflow-threshold")) {
+		if (validate_str_num(arg[0], "dirty overflow threshold",
+				OCF_ALRU_MIN_DIRTY_OVERFLOW_THRESHOLD, OCF_ALRU_MAX_DIRTY_OVERFLOW_THRESHOLD)) {
+			return FAILURE;
+		}
+
+		SET_CACHE_PARAM(cache_param_cleaning_alru_dirty_overflow_threshold,
 				strtoul(arg[0], NULL, 10));
 	} else {
 		return FAILURE;
@@ -962,6 +1089,14 @@ int set_param_cleaning_acp_handle_option(char *opt, const char **arg)
 
 		SET_CACHE_PARAM(cache_param_cleaning_acp_wake_up_time,
 				strtoul(arg[0], NULL, 10));
+	} else if (!strcmp(opt, "flush-split-unit")) {
+		if (validate_str_num(arg[0], "flush split unit",
+				OCF_ACP_MIN_FLUSH_SPLIT_UNIT, OCF_ACP_MAX_FLUSH_SPLIT_UNIT)) {
+			return FAILURE;
+		}
+
+		SET_CACHE_PARAM(cache_param_cleaning_acp_flush_split_unit,
+				strtoul(arg[0], NULL, 10));
 	} else if (!strcmp(opt, "flush-max-buffers")) {
 		if (validate_str_num(arg[0], "flush max buffers",
 				OCF_ACP_MIN_FLUSH_MAX_BUFFERS, OCF_ACP_MAX_FLUSH_MAX_BUFFERS)) {
@@ -970,6 +1105,24 @@ int set_param_cleaning_acp_handle_option(char *opt, const char **arg)
 
 		SET_CACHE_PARAM(cache_param_cleaning_acp_flush_max_buffers,
 				strtoul(arg[0], NULL, 10));
+	} else if (!strcmp(opt, "activity-threshold")) {
+		if (validate_str_num(arg[0], "activity threshold",
+				OCF_ACP_MIN_ACTIVITY_THRESHOLD, OCF_ACP_MAX_ACTIVITY_THRESHOLD)) {
+			return FAILURE;
+		}
+
+		SET_CACHE_PARAM(cache_param_cleaning_acp_activity_threshold,
+				strtoul(arg[0], NULL, 10));
+	} else if (!strcmp(opt, "dirty-overflow-threshold")) {
+		if (validate_str_num(arg[0], "dirty overflow threshold",
+				OCF_ACP_MIN_DIRTY_OVERFLOW_THRESHOLD, OCF_ACP_MAX_DIRTY_OVERFLOW_THRESHOLD)) {
+			return FAILURE;
+		}
+
+		SET_CACHE_PARAM(cache_param_cleaning_acp_dirty_overflow_threshold,
+				strtoul(arg[0], NULL, 10));
+	} else {
+		return FAILURE;
 	}
 
 	return SUCCESS;
@@ -1025,6 +1178,9 @@ int set_param_namespace_handle_option(char *namespace, char *opt, const char **a
 	if (!strcmp(namespace, "seq-cutoff")) {
 		return core_param_handle_option_generic(opt, arg,
 				set_param_seq_cutoff_handle_option);
+	} else if (!strcmp(namespace, "cleaner")) {
+		return cache_param_handle_option_generic(opt, arg,
+				set_param_cleaner_handle_option);
 	} else if (!strcmp(namespace, "cleaning")) {
 		return cache_param_handle_option_generic(opt, arg,
 				set_param_cleaning_handle_option);
@@ -1085,6 +1241,9 @@ static cli_namespace get_param_namespace = {
 	.long_name = "name",
 	.entries = {
 		GET_CORE_PARAMS_NS("seq-cutoff", "Sequential cutoff parameters")
+		GET_CACHE_PARAMS_NS("dirty-meta-chunk", "Dirty meta chunk policy parameters")
+		GET_CACHE_PARAMS_NS("dirty-data-chunk", "Dirty data chunk policy parameters")
+		GET_CACHE_PARAMS_NS("cleaner", "Cleaner policy parameters")
 		GET_CACHE_PARAMS_NS("cleaning", "Cleaning policy parameters")
 		GET_CACHE_PARAMS_NS("cleaning-alru", "Cleaning policy ALRU parameters")
 		GET_CACHE_PARAMS_NS("cleaning-acp", "Cleaning policy ACP parameters")
@@ -1116,20 +1275,36 @@ int get_param_namespace_handle_option(char *namespace, char *opt, const char **a
 		SELECT_CORE_PARAM(core_param_seq_cutoff_promotion_count);
 		return core_param_handle_option_generic(opt, arg,
 				get_param_handle_option);
+	} else if (!strcmp(namespace, "dirty-meta-chunk")) {
+		SELECT_CACHE_PARAM(cache_param_get_dirty_meta_chunk);
+		return cache_param_handle_option_generic(opt, arg,
+				get_param_handle_option);
+	} else if (!strcmp(namespace, "dirty-data-chunk")) {
+		SELECT_CACHE_PARAM(cache_param_get_dirty_data_chunk);
+		return cache_param_handle_option_generic(opt, arg,
+				get_param_handle_option);
+	} else if (!strcmp(namespace, "cleaner")) {
+		SELECT_CACHE_PARAM(cache_param_cleaner_policy_control);
+		return cache_param_handle_option_generic(opt, arg,
+				get_param_handle_option);
 	} else if (!strcmp(namespace, "cleaning")) {
 		SELECT_CACHE_PARAM(cache_param_cleaning_policy_type);
 		return cache_param_handle_option_generic(opt, arg,
 				get_param_handle_option);
 	} else if (!strcmp(namespace, "cleaning-alru")) {
 		SELECT_CACHE_PARAM(cache_param_cleaning_alru_wake_up_time);
-		SELECT_CACHE_PARAM(cache_param_cleaning_alru_stale_buffer_time);
+		SELECT_CACHE_PARAM(cache_param_cleaning_alru_flush_split_unit);
 		SELECT_CACHE_PARAM(cache_param_cleaning_alru_flush_max_buffers);
 		SELECT_CACHE_PARAM(cache_param_cleaning_alru_activity_threshold);
+		SELECT_CACHE_PARAM(cache_param_cleaning_alru_dirty_overflow_threshold);
 		return cache_param_handle_option_generic(opt, arg,
 				get_param_handle_option);
 	} else if (!strcmp(namespace, "cleaning-acp")) {
 		SELECT_CACHE_PARAM(cache_param_cleaning_acp_wake_up_time);
+		SELECT_CACHE_PARAM(cache_param_cleaning_acp_flush_split_unit);
 		SELECT_CACHE_PARAM(cache_param_cleaning_acp_flush_max_buffers);
+		SELECT_CACHE_PARAM(cache_param_cleaning_acp_activity_threshold);
+		SELECT_CACHE_PARAM(cache_param_cleaning_acp_dirty_overflow_threshold);
 		return cache_param_handle_option_generic(opt, arg,
 				get_param_handle_option);
 	} else if (!strcmp(namespace, "promotion")) {
@@ -1196,7 +1371,7 @@ int set_cache_mode_command_handle_option(char *opt, const char **arg)
 				OCF_CACHE_ID_MAX) == FAILURE)
 			return FAILURE;
 
-		command_args_values.cache_id = atoi(arg[0]);
+		command_args_values.cache_id = strtoul(arg[0], NULL, 10);
 	} else if (!strcmp(opt, "flush-cache")) {
 		if (!strcmp("yes", arg[0]))
 			command_args_values.cache_state_flush = YES;
@@ -1224,6 +1399,7 @@ static cli_option add_options[] = {
 	{'i', "cache-id", CACHE_ID_DESC, 1, "ID", CLI_OPTION_REQUIRED},
 	{'j', "core-id", CORE_ID_DESC, 1, "ID", 0},
 	{'d', "core-device", CORE_DEVICE_DESC, 1, "DEVICE", CLI_OPTION_REQUIRED},
+	{'m', "fs-meta-map-file", "fs meta map file", 1, "FILE", CLI_OPTION_OPTIONAL_ARG},
 	{0}
 };
 
@@ -1232,7 +1408,7 @@ int handle_add()
 	return add_core(command_args_values.cache_id,
 			command_args_values.core_id,
 			command_args_values.core_device,
-			false, false);
+			false, false, command_args_values.fs_meta_map_file);
 }
 
 static cli_option remove_options[] = {
@@ -1430,7 +1606,7 @@ static cli_option io_class_params_options[] = {
 
 struct {
 	int subcmd;
-	int cache_id;
+	uint32_t cache_id;
 	int io_class_id;
 	int cache_mode;
 	int io_class_prio;
@@ -1803,7 +1979,8 @@ int script_handle() {
 			command_args_values.core_id,
 			command_args_values.core_device,
 			command_args_values.try_add,
-			command_args_values.update_path
+			command_args_values.update_path,
+			command_args_values.fs_meta_map_file
 			);
 	case script_cmd_remove_core:
 		return remove_core(
@@ -1990,7 +2167,7 @@ static cli_option standby_params_options[] = {
 
 struct {
 	int subcmd;
-	int cache_id;
+	uint32_t cache_id;
 	int line_size;
 	const char* cache_device;
 	int force;
@@ -2039,7 +2216,7 @@ int standby_handle_option(char *opt, const char **arg)
 
 		standby_params_options[standby_opt_cache_id].priv |=
 				(1 << standby_opt_flag_set);
-		standby_params.cache_id = atoi(arg[0]);
+		standby_params.cache_id = strtoul(arg[0], NULL, 10);
 	} else if (!strcmp(opt, "cache-line-size")) {
 		if (validate_str_num_sbd(arg[0], "cache line size",
 				ocf_cache_line_size_min / KiB,
@@ -2258,6 +2435,17 @@ static cli_command cas_commands[] = {
 			.options = stop_options,
 			.command_handle_opts = command_handle_option,
 			.handle = handle_stop,
+			.flags = CLI_SU_REQUIRED,
+			.help = NULL,
+		},
+		{
+			.name = "dump-inflight",
+			.short_name = 'D',
+			.desc = "Dump inflight of cache and all cores",
+			.long_desc = NULL,
+			.options = dump_options,
+			.command_handle_opts = dump_inflight_command_handle_option,
+			.handle = handle_dump_inflight,
 			.flags = CLI_SU_REQUIRED,
 			.help = NULL,
 		},

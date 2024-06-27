@@ -14,11 +14,11 @@
 <DEBUG_PACKAGE>
 %define kver %(uname -r)
 %define kver_filename k%{expand:%(kname="%{kver}"; echo "${kname%.*}" | sed -r "y/-/_/;")}
-
+%define release_version <LAST_COMMIT_HASH_ABBR>
 
 Name:       <CAS_NAME>
 Version:    <CAS_VERSION>
-Release:    1%{?dist}
+Release:    %{release_version}_1%{?dist}
 Summary:    Open Cache Acceleration Software
 Group:      System
 Vendor:     Intel Corporation

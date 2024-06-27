@@ -32,7 +32,7 @@
 
 struct core_device {
 	int id;
-	int cache_id;
+	uint32_t cache_id;
 	char path[MAX_STR_LEN];
 	struct kcas_core_info info;
 };
@@ -112,24 +112,26 @@ int caslog(int log_level, const char *template, ...);
 #define UNDEFINED -1
 void metadata_memory_footprint(uint64_t size, float *footprint, const char **units);
 
-int start_cache(uint16_t cache_id, unsigned int cache_init,
+int start_cache(uint32_t cache_id, unsigned int cache_init,
 		const char *cache_device, ocf_cache_mode_t cache_mode,
-		ocf_cache_line_size_t line_size, int force);
-int stop_cache(uint16_t cache_id, int flush);
+		ocf_cache_line_size_t line_size, int force, const char *fs_meta_map_files);
+int stop_cache(uint32_t cache_id, int flush);
 
-int detach_cache(uint16_t cache_id);
-int attach_cache(uint16_t cache_id, const char *cache_device, int force);
+int detach_cache(uint32_t cache_id);
+int attach_cache(uint32_t cache_id, const char *cache_device, int force, const char *fs_meta_map_files);
+
+int dump_inflight_of_cache(uint32_t cache_id);
 
 #ifdef WI_AVAILABLE
-#define CAS_CLI_HELP_START_CACHE_MODES "wt|wb|wa|pt|wi|wo"
-#define CAS_CLI_HELP_SET_CACHE_MODES "wt|wb|wa|pt|wi|wo"
-#define CAS_CLI_HELP_SET_CACHE_MODES_FULL "Write-Through, Write-Back, Write-Around, Pass-Through, Write-Invalidate, Write-Only"
-#define CAS_CLI_HELP_START_CACHE_MODES_FULL "Write-Through, Write-Back, Write-Around, Pass-Through, Write-Invalidate, Write-Only"
+#define CAS_CLI_HELP_START_CACHE_MODES "wt|wb|wf|wa|pt|wi|wo"
+#define CAS_CLI_HELP_SET_CACHE_MODES "wt|wb|wf|wa|pt|wi|wo"
+#define CAS_CLI_HELP_SET_CACHE_MODES_FULL "Write-Through, Write-Back, Write-Force, Write-Around, Pass-Through, Write-Invalidate, Write-Only"
+#define CAS_CLI_HELP_START_CACHE_MODES_FULL "Write-Through, Write-Back, Write-Force, Write-Around, Pass-Through, Write-Invalidate, Write-Only"
 #else
-#define CAS_CLI_HELP_START_CACHE_MODES "wt|wb|wa|pt|wo"
-#define CAS_CLI_HELP_SET_CACHE_MODES "wt|wb|wa|pt|wo"
-#define CAS_CLI_HELP_START_CACHE_MODES_FULL "Write-Through, Write-Back, Write-Around, Pass-Through, Write-Only"
-#define CAS_CLI_HELP_SET_CACHE_MODES_FULL "Write-Through, Write-Back, Write-Around, Pass-Through, Write-Only"
+#define CAS_CLI_HELP_START_CACHE_MODES "wt|wb|wf|wa|pt|wo"
+#define CAS_CLI_HELP_SET_CACHE_MODES "wt|wb|wf|wa|pt|wo"
+#define CAS_CLI_HELP_START_CACHE_MODES_FULL "Write-Through, Write-Back, Write-Force, Write-Around, Pass-Through, Write-Only"
+#define CAS_CLI_HELP_SET_CACHE_MODES_FULL "Write-Through, Write-Back, Write-Force, Write-Around, Pass-Through, Write-Only"
 #endif
 
 /**
@@ -139,7 +141,7 @@ int attach_cache(uint16_t cache_id, const char *cache_device, int force);
  * @return exit code of successful completion is 0;
  * nonzero exit code means failure
  */
-int cache_params_set(unsigned int cache_id, struct cas_param *params);
+int cache_params_set(uint32_t cache_id, struct cas_param *params);
 
 /**
  * @brief get cache param value
@@ -149,7 +151,7 @@ int cache_params_set(unsigned int cache_id, struct cas_param *params);
  * @return exit code of successful completion is 0;
  * nonzero exit code means failure
  */
-int cache_get_param(unsigned int cache_id, unsigned int param_id,
+int cache_get_param(uint32_t cache_id, unsigned int param_id,
 		struct cas_param *param);
 /**
  * @brief handle get cache param command
@@ -158,7 +160,7 @@ int cache_get_param(unsigned int cache_id, unsigned int param_id,
  * @return exit code of successful completion is 0;
  * nonzero exit code means failure
  */
-int cache_params_get(unsigned int cache_id, struct cas_param *params,
+int cache_params_get(uint32_t cache_id, struct cas_param *params,
 		unsigned int output_format);
 
 /**
@@ -169,7 +171,7 @@ int cache_params_get(unsigned int cache_id, struct cas_param *params,
  * @return exit code of successful completion is 0;
  * nonzero exit code means failure
  */
-int core_params_set(unsigned int cache_id, unsigned int core_id,
+int core_params_set(uint32_t cache_id, unsigned int core_id,
 		struct cas_param *params);
 
 /**
@@ -180,7 +182,7 @@ int core_params_set(unsigned int cache_id, unsigned int core_id,
  * @return exit code of successful completion is 0;
  * nonzero exit code means failure
  */
-int core_params_get(unsigned int cache_id, unsigned int core_id,
+int core_params_get(uint32_t cache_id, unsigned int core_id,
 		struct cas_param *params, unsigned int output_format);
 
 /**
@@ -190,7 +192,7 @@ int core_params_get(unsigned int cache_id, unsigned int core_id,
  * @param flush whenever we should flush cache during execution of command. Options: YES, NO, UNDEFINED.
  *              (UNDEFINED is illegal when transitioning from Write-Back mode to any other mode)
  */
-int set_cache_mode(unsigned int cache_state, unsigned int cache_id, int flush);
+int set_cache_mode(unsigned int cache_state, uint32_t cache_id, int flush);
 
 /**
  * @brief add core device to a cache
@@ -202,11 +204,11 @@ int set_cache_mode(unsigned int cache_state, unsigned int cache_id, int flush);
  * @param update_path try update path to core device
  * @return 0 upon successful core addition, 1 upon failure
  */
-int add_core(unsigned int cache_id, unsigned int core_id, const char *core_device, int try_add, int update_path);
+int add_core(uint32_t cache_id, unsigned int core_id, const char *core_device, int try_add, int update_path, const char *fs_meta_map_file);
 
-int get_core_info(int fd, int cache_id, int core_id, struct kcas_core_info *info, bool by_id_path);
+int get_core_info(int fd, uint32_t cache_id, int core_id, struct kcas_core_info *info, bool by_id_path);
 
-int remove_core(unsigned int cache_id, unsigned int core_id,
+int remove_core(uint32_t cache_id, unsigned int core_id,
 		bool detach, bool force_no_flush);
 
 /**
@@ -219,7 +221,7 @@ int remove_core(unsigned int cache_id, unsigned int core_id,
  *
  * @return 0 upon successful detach, 1 upon failure
  */
-int standby_init(int cache_id, ocf_cache_line_size_t line_size,
+int standby_init(uint32_t cache_id, ocf_cache_line_size_t line_size,
 		const char *cache_device, int force);
 
 /**
@@ -231,7 +233,7 @@ int standby_init(int cache_id, ocf_cache_line_size_t line_size,
  *
  * @return 0 upon successful detach, 1 upon failure
  */
-int standby_load(int cache_id, ocf_cache_line_size_t line_size,
+int standby_load(uint32_t cache_id, ocf_cache_line_size_t line_size,
 		const char *cache_device);
 
 /**
@@ -241,7 +243,7 @@ int standby_load(int cache_id, ocf_cache_line_size_t line_size,
  *
  * @return 0 upon successful detach, 1 upon failure
  */
-int standby_detach(int cache_id);
+int standby_detach(uint32_t cache_id);
 
 /**
  * @brief activate failover standby cache instance
@@ -251,9 +253,9 @@ int standby_detach(int cache_id);
  *
  * @return 0 upon successful detach, 1 upon failure
  */
-int standby_activate(int cache_id, const char *cache_device);
+int standby_activate(uint32_t cache_id, const char *cache_device);
 
-void check_cache_state_incomplete(int cache_id, int fd);
+void check_cache_state_incomplete(uint32_t cache_id, int fd);
 
 /**
  * @brief remove inactive core device from a cache
@@ -263,35 +265,35 @@ void check_cache_state_incomplete(int cache_id, int fd);
  * @param force remove inactive force even if it has dirty cache lines assigned
  * @return 0 upon successful core removal, 1 upon failure
  */
-int remove_inactive_core(unsigned int cache_id, unsigned int core_id, bool force);
+int remove_inactive_core(uint32_t cache_id, unsigned int core_id, bool force);
 
 int core_pool_remove(const char *core_device);
 int get_core_pool_count(int fd);
 
-int reset_counters(unsigned int cache_id, unsigned int core_id);
+int reset_counters(uint32_t cache_id, unsigned int core_id);
 
-int purge_cache(unsigned int cache_id);
-int purge_core(unsigned int cache_id, unsigned int core_id);
+int purge_cache(uint32_t cache_id);
+int purge_core(uint32_t cache_id, unsigned int core_id);
 
-int flush_cache(unsigned int cache_id);
-int flush_core(unsigned int cache_id, unsigned int core_id);
+int flush_cache(uint32_t cache_id);
+int flush_core(uint32_t cache_id, unsigned int core_id);
 
 int check_cache_device(const char *device_path);
 
-int partition_list(unsigned int cache_id, unsigned int output_format);
-int partition_setup(unsigned int cache_id, const char *file);
+int partition_list(uint32_t cache_id, unsigned int output_format);
+int partition_setup(uint32_t cache_id, const char *file);
 int partition_is_name_valid(const char *name);
 
 int cas_module_version(char *buff, int size);
 int list_caches(unsigned int list_format, bool by_id_path);
-int cache_status(unsigned int cache_id, unsigned int core_id, int io_class_id,
+int cache_status(uint32_t cache_id, unsigned int core_id, int io_class_id,
 		 unsigned int stats_filters, unsigned int stats_format, bool by_id_path);
 int get_inactive_core_count(const struct kcas_cache_info *cache_info);
 
 int open_ctrl_device_quiet();
 int open_ctrl_device();
-int *get_cache_ids(int *cache_count);
-struct cache_device *get_cache_device_by_id_fd(int cache_id, int fd, bool by_id_path);
+uint32_t *get_cache_ids(int *cache_count);
+struct cache_device *get_cache_device_by_id_fd(uint32_t cache_id, int fd, bool by_id_path);
 struct cache_device **get_cache_devices(int *caches_count, bool by_id_path);
 void free_cache_devices_list(struct cache_device **caches, int caches_count);
 
@@ -334,7 +336,7 @@ float calculate_flush_progress(unsigned dirty, unsigned flushed);
  * @param[out] progress flush progress
  * @return 0 on success, nonzero on failure
  */
-int get_flush_progress(int unsigned cache_id, float *progress);
+int get_flush_progress(uint32_t cache_id, float *progress);
 
 /**
  * @brief print error message corresponding with CAS extended error code.
